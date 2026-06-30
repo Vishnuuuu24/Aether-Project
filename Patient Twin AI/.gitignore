@@ -1,0 +1,43 @@
+# --- Secrets / local config (NEVER commit) ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtualenvs ---
+.venv/
+venv/
+env/
+
+# --- Model caches / weights (never in git; see CLAUDE.md) ---
+models/cache/
+*.gguf
+*.safetensors
+*.bin
+.cache/
+huggingface/
+
+# --- Docker volume data (if ever bind-mounted locally) ---
+pgdata/
+qdrant_storage/
+minio_data/
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
+volumes/
+some_commands.txt

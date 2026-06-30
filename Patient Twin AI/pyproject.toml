@@ -1,0 +1,30 @@
+[project]
+name = "patient-copilot"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+# Alembic migrations are generated artifacts, not hand-maintained typed code.
+exclude = ["^core/db/migrations/"]
+
+# Tests aren't held to strict def/generic annotation rules (fixtures, helpers).
+[[tool.mypy.overrides]]
+module = ["core.*.tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+
+[tool.pytest.ini_options]
+testpaths = ["schemas", "core", "services", "ai"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
