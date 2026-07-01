@@ -1,0 +1,29 @@
+# Population reference ranges — the COLD-START FALLBACK only (docs/05 §4.1).
+#
+# Until a patient has enough quality data to personalise (sufficiency, docs/05 §4),
+# the baseline falls back to age/sex population ranges, ALWAYS flagged
+# is_population_fallback=true. These are the population's numbers — never presented
+# to a patient as "your normal".
+#
+# ⚠️  SET WITH CLINICAL INPUT — intentionally UNSET.
+#     Do not hardcode ranges like "resting HR 60-100": that both fabricates clinical
+#     content (CLAUDE.md) and undermines the personal-baseline thesis. A clinician
+#     fills these in. While unset, no population fallback is available and the
+#     baseline stays unavailable until the patient personalises.
+#
+# Shape (to be finalised with clinical input), per metric:
+#   <metric>:
+#     - sex: <male|female|any>          # set with clinical input
+#       age_min: <years>                # set with clinical input
+#       age_max: <years>                # set with clinical input
+#       context: <resting|active|asleep|...>   # set with clinical input
+#       low: <value>                    # set with clinical input
+#       high: <value>                   # set with clinical input
+#       unit: <unit>                    # set with clinical input
+
+ranges:
+  heart_rate:        # set with clinical input
+  respiratory_rate:  # set with clinical input
+  spo2:              # set with clinical input
+  skin_temp:         # set with clinical input
+  # ... remaining metrics added with clinical input

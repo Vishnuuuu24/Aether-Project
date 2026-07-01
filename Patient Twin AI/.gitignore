@@ -34,6 +34,12 @@ pgdata/
 qdrant_storage/
 minio_data/
 
+# --- Large replay datasets (download separately; keep README/manifests) ---
+datasets/**/*.pkl
+datasets/**/*.npy
+datasets/**/*.csv
+datasets/**/*.zip
+
 # --- OS / editor ---
 .DS_Store
 *.swp

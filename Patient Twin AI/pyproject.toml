@@ -14,12 +14,13 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-# Alembic migrations are generated artifacts, not hand-maintained typed code.
-exclude = ["^core/db/migrations/"]
+# Alembic migrations are generated artifacts; api-gateway is a hyphen-named dir
+# (not a Python package), checked only as a runtime skeleton.
+exclude = ["^core/db/migrations/", "^services/api-gateway/"]
 
 # Tests aren't held to strict def/generic annotation rules (fixtures, helpers).
 [[tool.mypy.overrides]]
-module = ["core.*.tests.*", "schemas.tests.*"]
+module = ["core.*.tests.*", "schemas.tests.*", "services.*.tests.*", "ai.*.tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_any_generics = false

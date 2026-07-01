@@ -2,6 +2,7 @@
 stack is wired — /healthz and /readyz green. Real routing (docs/07) is
 built in Sprint 4.
 """
+
 from __future__ import annotations
 
 import os

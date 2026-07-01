@@ -1,0 +1,27 @@
+# SQI (Signal Quality Index) thresholds — per-metric minimum quality to enter the baseline.
+#
+# docs/05 §3: only readings with `sqi >= threshold[metric]` update the personal
+# baseline (included_in_baseline=true). Sub-threshold readings are stored but must
+# never pollute the baseline.
+#
+# ⚠️  SET WITH CLINICAL INPUT — these are intentionally UNSET (null).
+#     Values are on the SQI scale [0.0, 1.0].
+#     While a metric is unset, the SqiGate is FAIL-SAFE: readings of that metric are
+#     treated as NOT quality-passing and never enter the baseline. Do not guess a
+#     value here; a clinician / signal expert fills these in.
+
+thresholds:
+  heart_rate:        # set with clinical input
+  steps:             # set with clinical input
+  sleep:             # set with clinical input
+  spo2:              # set with clinical input
+  respiratory_rate:  # set with clinical input
+  skin_temp:         # set with clinical input
+  ecg:               # set with clinical input
+  hrv:               # set with clinical input
+  glucose:           # set with clinical input
+  bp:                # set with clinical input
+  vo2max:            # set with clinical input
+  gait:              # set with clinical input
+  weight:            # set with clinical input
+  menstrual_cycle:   # set with clinical input

@@ -5,6 +5,9 @@ PyJWT[crypto]==2.9.0
 SQLAlchemy==2.0.34
 alembic==1.13.2
 psycopg[binary]==3.2.4
+# ai/features reads clinical config YAML stubs; stubs keep mypy --strict clean.
+PyYAML==6.0.3
+types-PyYAML==6.0.12.20240917
 pytest==8.3.2
 pytest-asyncio==0.24.0
 ruff==0.6.4
