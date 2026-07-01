@@ -43,6 +43,7 @@ class BaselineNode(VersionedNode):
 class DeviationDirection(str, Enum):
     UP = "up"
     DOWN = "down"
+    NONE = "none"  # reading sits at the baseline center — no deviation
 
 
 class DeviationNode(VersionedNode):
