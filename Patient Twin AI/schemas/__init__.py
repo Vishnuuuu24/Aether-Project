@@ -3,7 +3,7 @@ redefines a contract locally (see CLAUDE.md "Hard rules for the agent").
 """
 
 from .audit import AuditAction, AuditActor, AuditRecord
-from .consent import Consent, ConsentScope, PatientProfile, SexAtBirth
+from .consent import Consent, ConsentScope
 from .output_contract import (
     MANDATORY_DISCLAIMER,
     Evidence,
@@ -16,6 +16,7 @@ from .output_contract import (
     RecommendedAction,
     Severity,
 )
+from .patient import PatientProfile, SexAtBirth
 from .psg import (
     AllergyNode,
     BaselineNode,
@@ -38,6 +39,7 @@ from .reading import (
     MetricCode,
     Reading,
 )
+from .vector import VectorPayload, VectorSourceType
 
 __all__ = [
     "AuditAction",
@@ -75,4 +77,6 @@ __all__ = [
     "MeasurementContext",
     "MetricCode",
     "Reading",
+    "VectorPayload",
+    "VectorSourceType",
 ]
