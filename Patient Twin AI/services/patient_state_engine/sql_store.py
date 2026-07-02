@@ -14,17 +14,23 @@ constraint is the hardening fix (deferred — needs a migration).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from schemas.psg import AllergyNode as AllergyNodeSchema
 from schemas.psg import BaselineNode as BaselineNodeSchema
+from schemas.psg import ConditionNode as ConditionNodeSchema
 from schemas.psg import DeviationDirection, EventSeverity
 from schemas.psg import DeviationNode as DeviationNodeSchema
+from schemas.psg import DocumentNode as DocumentNodeSchema
 from schemas.psg import EventNode as EventNodeSchema
 from schemas.psg import ForecastNode as ForecastNodeSchema
+from schemas.psg import MedicationNode as MedicationNodeSchema
+from schemas.psg import ObservationNode as ObservationNodeSchema
 from schemas.reading import MeasurementContext, MetricCode
 
 
@@ -150,6 +156,157 @@ class SqlAlchemyPSGStore:
             latest[row.metric_code] = row
         return [_forecast_to_schema(row) for row in latest.values()]
 
+    def add_document(self, node: DocumentNodeSchema) -> None:
+        from core.db.models import DocumentNode as DocumentRow
+
+        self._session.add(
+            DocumentRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                doc_type=node.doc_type,
+                uri=node.uri,
+                ocr_ref=node.ocr_ref,
+                codes=list(node.codes),
+            )
+        )
+        self._session.flush()
+
+    def add_condition(self, node: ConditionNodeSchema) -> None:
+        from core.db.models import ConditionNode as ConditionRow
+
+        self._session.add(
+            ConditionRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                snomed_code=node.snomed_code,
+                display=node.display,
+                status=node.status,
+                onset=node.onset,
+                source_document_id=node.source_document_id,
+            )
+        )
+        self._session.flush()
+
+    def add_medication(self, node: MedicationNodeSchema) -> None:
+        from core.db.models import MedicationNode as MedicationRow
+
+        self._session.add(
+            MedicationRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                rxnorm_code=node.rxnorm_code,
+                display=node.display,
+                dose=node.dose,
+                status=node.status,
+                source_document_id=node.source_document_id,
+            )
+        )
+        self._session.flush()
+
+    def add_allergy(self, node: AllergyNodeSchema) -> None:
+        from core.db.models import AllergyNode as AllergyRow
+
+        self._session.add(
+            AllergyRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                substance_code=node.substance_code,
+                reaction=node.reaction,
+                severity=node.severity,
+                source=node.source,
+                status=node.status,
+            )
+        )
+        self._session.flush()
+
+    def add_observation(self, node: ObservationNodeSchema) -> None:
+        from core.db.models import ObservationNode as ObservationRow
+
+        self._session.add(
+            ObservationRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                loinc_code=node.loinc_code,
+                display=node.display,
+                value=node.value,
+                unit=node.unit,
+                ts=node.ts,
+                source_document_id=node.source_document_id,
+                status=node.status,
+            )
+        )
+        self._session.flush()
+
+    def current_conditions(self, patient_id: UUID) -> list[ConditionNodeSchema]:
+        from core.db.models import ConditionNode as ConditionRow
+
+        rows = self._latest_by_key(ConditionRow, patient_id, lambda r: r.snomed_code)
+        return [_condition_to_schema(r) for r in rows]
+
+    def current_medications(self, patient_id: UUID) -> list[MedicationNodeSchema]:
+        from core.db.models import MedicationNode as MedicationRow
+
+        rows = self._latest_by_key(MedicationRow, patient_id, lambda r: r.rxnorm_code)
+        return [_medication_to_schema(r) for r in rows]
+
+    def current_allergies(self, patient_id: UUID) -> list[AllergyNodeSchema]:
+        from core.db.models import AllergyNode as AllergyRow
+
+        rows = self._latest_by_key(AllergyRow, patient_id, lambda r: r.substance_code)
+        return [_allergy_to_schema(r) for r in rows]
+
+    def recent_observations(self, patient_id: UUID, *, limit: int) -> list[ObservationNodeSchema]:
+        from core.db.models import ObservationNode as ObservationRow
+
+        rows = (
+            self._session.execute(
+                select(ObservationRow)
+                .where(ObservationRow.patient_id == patient_id)
+                .order_by(ObservationRow.ts.desc(), ObservationRow.id.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return [_observation_to_schema(r) for r in rows]
+
+    def _latest_by_key(
+        self, row_cls: Any, patient_id: UUID, key: Callable[[Any], str]
+    ) -> list[Any]:
+        rows = (
+            self._session.execute(
+                select(row_cls)
+                .where(row_cls.patient_id == patient_id)
+                .order_by(row_cls.version.asc())
+            )
+            .scalars()
+            .all()
+        )
+        latest: dict[str, Any] = {}
+        for row in rows:  # ascending version => last write per key wins
+            latest[key(row)] = row
+        return list(latest.values())
+
     def current_baseline(
         self, patient_id: UUID, metric_code: str, context: str
     ) -> BaselineNodeSchema | None:
@@ -217,6 +374,72 @@ def _baseline_to_schema(r: Any) -> BaselineNodeSchema:
         window_spec=r.window_spec,
         confidence=r.confidence,
         is_population_fallback=r.is_population_fallback,
+    )
+
+
+def _condition_to_schema(r: Any) -> ConditionNodeSchema:
+    return ConditionNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        snomed_code=r.snomed_code,
+        display=r.display,
+        status=r.status,
+        onset=r.onset,
+        source_document_id=r.source_document_id,
+    )
+
+
+def _medication_to_schema(r: Any) -> MedicationNodeSchema:
+    return MedicationNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        rxnorm_code=r.rxnorm_code,
+        display=r.display,
+        dose=r.dose,
+        status=r.status,
+        source_document_id=r.source_document_id,
+    )
+
+
+def _allergy_to_schema(r: Any) -> AllergyNodeSchema:
+    return AllergyNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        substance_code=r.substance_code,
+        reaction=r.reaction,
+        severity=r.severity,
+        source=r.source,
+        status=r.status,
+    )
+
+
+def _observation_to_schema(r: Any) -> ObservationNodeSchema:
+    return ObservationNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        loinc_code=r.loinc_code,
+        display=r.display,
+        value=r.value,
+        unit=r.unit,
+        ts=r.ts,
+        source_document_id=r.source_document_id,
+        status=r.status,
     )
 
 

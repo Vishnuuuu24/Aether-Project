@@ -19,7 +19,9 @@ from ._factories import (
     OCCURRED_AT,
     VERSIONS,
     baseline,
+    coded_result,
     deviation,
+    documents_consent,
     event_candidate,
     forecast,
     forecast_consent,
@@ -157,6 +159,45 @@ def test_projection_withholds_forecasts_without_forecast_scope() -> None:
     proj = engine.build_projection(pid)
     assert proj.consent_scope == ["vitals"]
     assert proj.latest_forecasts == []
+
+
+def test_projection_surfaces_documents_under_documents_scope() -> None:
+    pid = uuid4()
+    engine, _ = _engine(pid, documents_consent())
+    engine.commit_coding(coded_result(pid))
+
+    proj = engine.build_projection(pid)
+    assert proj.consent_scope == ["documents"]
+    assert [c.snomed_code for c in proj.conditions] == ["44054006"]
+    assert [m.rxnorm_code for m in proj.medications] == ["6809"]
+    assert len(proj.recent_observations) == 1
+    # Vitals sections withheld — DOCUMENTS scope only.
+    assert proj.baselines == []
+
+
+def test_projection_withholds_documents_without_documents_scope() -> None:
+    pid = uuid4()
+    store = InMemoryPSGStore()
+    consent_provider = StaticConsentProvider()
+    consent_provider.grant(pid, documents_consent())
+    profile_provider = StaticProfileProvider()
+    profile_provider.put(profile(pid))
+    engine = PatientStateEngine(
+        store=store,
+        consent_provider=consent_provider,
+        audit_writer=AuditWriter(InMemoryAuditStore()),
+        versions=VERSIONS,
+        profile_provider=profile_provider,
+        clock=lambda: OCCURRED_AT,
+    )
+    engine.commit_coding(coded_result(pid))
+    assert len(engine.build_projection(pid).conditions) == 1
+
+    consent_provider.grant(pid, vitals_consent())  # DOCUMENTS scope dropped
+    proj = engine.build_projection(pid)
+    assert proj.conditions == []
+    assert proj.medications == []
+    assert proj.recent_observations == []
 
 
 def test_projection_carries_no_raw_signals() -> None:

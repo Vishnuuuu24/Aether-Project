@@ -20,6 +20,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from core.audit import AuditWriter
@@ -29,10 +30,22 @@ from core.versioning import VersionSet
 from schemas.audit import AuditAction, AuditActor
 from schemas.baseline import Baseline, BaselineAvailability, DeviationMagnitude, DeviationResult
 from schemas.consent import ConsentScope
+from schemas.document import CodedEntity, DocumentCodingResult, EntityType
 from schemas.event import EventCandidate
 from schemas.forecast import Forecast
 from schemas.patient import PatientProfile
-from schemas.psg import BaselineNode, DeviationNode, EventNode, ForecastNode, PSGProjection
+from schemas.psg import (
+    AllergyNode,
+    BaselineNode,
+    ConditionNode,
+    DeviationNode,
+    DocumentNode,
+    EventNode,
+    ForecastNode,
+    MedicationNode,
+    ObservationNode,
+    PSGProjection,
+)
 
 from .consent import ConsentProvider
 from .profile import ProfileProvider
@@ -46,6 +59,17 @@ _FLOAT_ABS_TOL = 1e-9
 
 class ProfileNotFoundError(LookupError):
     """No patient profile on file — the projection cannot be built."""
+
+
+@dataclass(frozen=True)
+class DocumentCommit:
+    """Outcome of committing one coded document to the PSG."""
+
+    document_node: DocumentNode
+    conditions: list[ConditionNode]
+    medications: list[MedicationNode]
+    observations: list[ObservationNode]
+    allergies: list[AllergyNode]
 
 
 @dataclass(frozen=True)
@@ -274,6 +298,112 @@ class PatientStateEngine:
             output_refs=[f"forecast:{node.id}"],
         )
         return node
+
+    def commit_coding(
+        self, result: DocumentCodingResult, *, occurred_at: datetime | None = None
+    ) -> DocumentCommit:
+        """Commit a coded document to the PSG (docs/04 §4). Consent-gated on DOCUMENTS.
+        Each coded entity becomes an append-only, audited node carrying its
+        proposed/committed status; sub-threshold codes persist as `proposed` and are
+        never treated as fact.
+        """
+        created_at = occurred_at or self._clock()
+        if created_at.tzinfo is None:
+            raise ValueError("occurred_at must be timezone-aware")
+        consent = self._consent.get_consent(result.patient_id)
+        require_consent(consent, ConsentScope.DOCUMENTS, patient_id=result.patient_id)
+
+        doc_node = DocumentNode(
+            patient_id=result.patient_id,
+            version=1,
+            supersedes=None,
+            created_at=created_at,
+            created_by=ACTOR_NAME,
+            doc_type=result.doc_type.value,
+            codes=[e.code for e in result.entities],
+        )
+        self._store.add_document(doc_node)
+        self._write_audit(
+            result.patient_id,
+            AuditAction.STATE_COMMIT,
+            input_refs=[f"coder:{result.coder_version}"],
+            output_refs=[f"document:{doc_node.id}"],
+        )
+
+        commit = DocumentCommit(
+            document_node=doc_node, conditions=[], medications=[], observations=[], allergies=[]
+        )
+        for entity in result.entities:
+            self._commit_entity(entity, result.patient_id, doc_node.id, created_at, commit)
+        return commit
+
+    def _commit_entity(
+        self,
+        entity: CodedEntity,
+        patient_id: UUID,
+        document_id: UUID,
+        created_at: datetime,
+        commit: DocumentCommit,
+    ) -> None:
+        common: dict[str, Any] = {
+            "patient_id": patient_id,
+            "version": 1,
+            "supersedes": None,
+            "created_at": created_at,
+            "created_by": ACTOR_NAME,
+        }
+        node: ConditionNode | MedicationNode | ObservationNode | AllergyNode
+        if entity.entity_type is EntityType.CONDITION:
+            node = ConditionNode(
+                **common,
+                snomed_code=entity.code,
+                display=entity.display,
+                status=entity.status.value,
+                source_document_id=document_id,
+            )
+            self._store.add_condition(node)
+            commit.conditions.append(node)
+        elif entity.entity_type is EntityType.MEDICATION:
+            node = MedicationNode(
+                **common,
+                rxnorm_code=entity.code,
+                display=entity.display,
+                status=entity.status.value,
+                source_document_id=document_id,
+            )
+            self._store.add_medication(node)
+            commit.medications.append(node)
+        elif entity.entity_type is EntityType.OBSERVATION:
+            node = ObservationNode(
+                **common,
+                loinc_code=entity.code,
+                display=entity.display,
+                value=entity.value or "",
+                unit=entity.unit or "",
+                ts=created_at,
+                source_document_id=document_id,
+                status=entity.status.value,
+            )
+            self._store.add_observation(node)
+            commit.observations.append(node)
+        else:  # ALLERGY
+            node = AllergyNode(
+                **common,
+                substance_code=entity.code,
+                reaction=entity.value or "unspecified",
+                severity="unspecified",
+                source=f"document:{document_id}",
+                status=entity.status.value,
+            )
+            self._store.add_allergy(node)
+            commit.allergies.append(node)
+
+        self._write_audit(
+            patient_id,
+            AuditAction.STATE_COMMIT,
+            input_refs=[f"document:{document_id}", f"code:{entity.code_system}:{entity.code}"],
+            output_refs=[f"{entity.entity_type.value}:{node.id}"],
+        )
 
     # -- read ----------------------------------------------------------------
 

@@ -1,0 +1,13 @@
+# Heavy ML backends for the T3.1/T3.2 real adapters (docs/03). NOT needed for the
+# base test suite — deterministic fakes drive those. Install this to activate real
+# OCR (Docling), dense embeddings (MedCPT/BGE), and cross-encoder reranking
+# (bge-reranker). Large downloads (torch + model weights).
+#
+# MedCAT is intentionally absent: real clinical coding needs a UMLS/SNOMED-licensed
+# model pack (a credential, never committed). Add `medcat` + set MEDCAT_MODEL_PACK
+# once the license is provisioned.
+sentence-transformers>=3.0,<4
+transformers>=4.44
+torch>=2.2
+docling>=2.0
+huggingface-hub>=0.24

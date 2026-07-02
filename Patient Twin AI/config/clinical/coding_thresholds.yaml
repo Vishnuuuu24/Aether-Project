@@ -1,0 +1,15 @@
+# Clinical-coding confidence thresholds (docs/04 §4).
+#
+# A coded entity is `committed` only when the coder's confidence >= the threshold
+# for its entity type; otherwise it stays `proposed` and is surfaced for human
+# confirmation (never silently committed).
+#
+# ⚠️  SET WITH CLINICAL INPUT — intentionally UNSET. While unset, the gate is
+#     fail-safe: EVERY coded entity stays `proposed` (nothing auto-commits). Values
+#     are on the coder's confidence scale [0.0, 1.0]. A clinician sets these.
+
+thresholds:
+  condition:    # set with clinical input
+  medication:   # set with clinical input
+  observation:  # set with clinical input
+  allergy:      # set with clinical input

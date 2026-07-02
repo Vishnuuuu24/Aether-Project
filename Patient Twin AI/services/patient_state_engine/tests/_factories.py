@@ -15,6 +15,13 @@ from schemas.baseline import (
     DeviationResult,
 )
 from schemas.consent import Consent, ConsentScope
+from schemas.document import (
+    CodedEntity,
+    CodeStatus,
+    DocumentCodingResult,
+    DocumentType,
+    EntityType,
+)
 from schemas.event import EventCandidate, EventStatus
 from schemas.forecast import Forecast
 from schemas.patient import PatientProfile, SexAtBirth
@@ -136,6 +143,54 @@ def forecast_consent() -> Consent:
         version="v1",
         granted_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
+
+
+def documents_consent() -> Consent:
+    return Consent(
+        scope=[ConsentScope.DOCUMENTS],
+        version="v1",
+        granted_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def coded_result(patient_id: UUID, **overrides: Any) -> DocumentCodingResult:
+    """A committed condition + medication and a sub-threshold (proposed) observation."""
+    data: dict[str, Any] = {
+        "document_id": uuid4(),
+        "patient_id": patient_id,
+        "doc_type": DocumentType.DISCHARGE_SUMMARY,
+        "coder_version": "dictionary-dev",
+        "entities": [
+            CodedEntity(
+                entity_type=EntityType.CONDITION,
+                code_system="SNOMED CT",
+                code="44054006",
+                display="Type 2 diabetes mellitus",
+                confidence=0.9,
+                status=CodeStatus.COMMITTED,
+            ),
+            CodedEntity(
+                entity_type=EntityType.MEDICATION,
+                code_system="RxNorm",
+                code="6809",
+                display="Metformin",
+                confidence=0.8,
+                status=CodeStatus.COMMITTED,
+            ),
+            CodedEntity(
+                entity_type=EntityType.OBSERVATION,
+                code_system="LOINC",
+                code="4548-4",
+                display="Hemoglobin A1c",
+                confidence=0.4,
+                status=CodeStatus.PROPOSED,
+                value="7.2",
+                unit="%",
+            ),
+        ],
+    }
+    data.update(overrides)
+    return DocumentCodingResult(**data)
 
 
 def profile(patient_id: UUID, **overrides: Any) -> PatientProfile:

@@ -57,16 +57,34 @@ python -m vllm.entrypoints.openai.api_server \
 ```
 Set `LLM_GATEWAY_BASE_URL=http://host.docker.internal:8000/v1` (or the `vllm` container in §4).
 
-### 2b. Local dev/demo — MacBook M5 Pro (Metal / mlx-lm)
+### 2b. Local dev/demo — MacBook M5 Pro (Metal)
+
+The model runs **natively on the macOS host** (Metal cannot be reached from inside
+Docker) and exposes an OpenAI-compatible endpoint. Two interchangeable ways to serve
+the same MLX quant — pick one:
+
+**Option A — LM Studio (GUI, recommended for demo).** Load `mlx-community/Qwen3.6-35B-A3B-4bit`,
+then Developer → Local Server → Start on port **1234**. It serves `/v1/*`; the API model
+id is under `GET /v1/models` (here: `qwen3.6-35b-a3b`).
+
+**Option B — mlx-lm (headless).**
 ```bash
-# macOS host. Runs natively — Metal CANNOT be accessed from Docker containers.
 pip install mlx-lm
-# Verify the community quant loads before relying on it (MoE routing):
-mlx_lm.server \
-  --model mlx-community/Qwen3.6-35B-A3B-4bit \
-  --port 8000
+mlx_lm.server --model mlx-community/Qwen3.6-35B-A3B-4bit --port 8000   # verify the MoE quant loads first
 ```
-Set `LLM_GATEWAY_BASE_URL=http://host.docker.internal:8000/v1`. Docker Desktop reaches the host via `host.docker.internal` (already wired on the `llm-gateway` service). Keep context modest; embeddings/reranker small or CPU. The `gpu` container profile in §4 does **not** apply on Mac.
+
+Wire it up (`.env`):
+```
+LLM_BACKEND=mlx
+LLM_GATEWAY_BASE_URL=http://host.docker.internal:1234/v1   # LM Studio (use :8000 for mlx-lm)
+PRIMARY_MODEL=qwen3.6-35b-a3b                              # the id from GET /v1/models
+```
+Docker Desktop reaches the host via `host.docker.internal` (already wired on the
+`llm-gateway` service; verified — a container `curl host.docker.internal:1234/v1/models`
+returns the model). **A host process** (e.g. `pytest`/scripts run directly on the Mac,
+not in a container) must use `http://localhost:1234/v1` instead — `host.docker.internal`
+only resolves inside containers. Keep context modest; embeddings/reranker small or CPU.
+The `gpu` container profile in §4 does **not** apply on Mac.
 
 ## 3. docker-compose.yml (core)
 

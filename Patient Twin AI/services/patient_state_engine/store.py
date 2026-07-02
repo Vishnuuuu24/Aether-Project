@@ -13,10 +13,38 @@ storage-agnostic; the SQL store converts to/from the ORM rows.
 
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Callable
+from typing import Protocol, TypeVar
 from uuid import UUID
 
-from schemas.psg import BaselineNode, DeviationNode, EventNode, ForecastNode
+from schemas.psg import (
+    AllergyNode,
+    BaselineNode,
+    ConditionNode,
+    DeviationNode,
+    DocumentNode,
+    EventNode,
+    ForecastNode,
+    MedicationNode,
+    ObservationNode,
+    VersionedNode,
+)
+
+_N = TypeVar("_N", bound=VersionedNode)
+
+
+def _latest_by_key(
+    nodes: list[_N], patient_id: UUID, key: Callable[[_N], str]
+) -> list[_N]:
+    """Current node per key for one patient = highest-version row per key."""
+    latest: dict[str, _N] = {}
+    for node in nodes:
+        if node.patient_id != patient_id:
+            continue
+        k = key(node)
+        if k not in latest or node.version > latest[k].version:
+            latest[k] = node
+    return list(latest.values())
 
 
 class PSGStore(Protocol):
@@ -24,6 +52,11 @@ class PSGStore(Protocol):
     def add_deviation(self, node: DeviationNode) -> None: ...
     def add_event(self, node: EventNode) -> None: ...
     def add_forecast(self, node: ForecastNode) -> None: ...
+    def add_document(self, node: DocumentNode) -> None: ...
+    def add_condition(self, node: ConditionNode) -> None: ...
+    def add_medication(self, node: MedicationNode) -> None: ...
+    def add_allergy(self, node: AllergyNode) -> None: ...
+    def add_observation(self, node: ObservationNode) -> None: ...
     def current_baseline(
         self, patient_id: UUID, metric_code: str, context: str
     ) -> BaselineNode | None: ...
@@ -31,6 +64,10 @@ class PSGStore(Protocol):
     def recent_deviations(self, patient_id: UUID, *, limit: int) -> list[DeviationNode]: ...
     def active_events(self, patient_id: UUID) -> list[EventNode]: ...
     def latest_forecasts(self, patient_id: UUID) -> list[ForecastNode]: ...
+    def current_conditions(self, patient_id: UUID) -> list[ConditionNode]: ...
+    def current_medications(self, patient_id: UUID) -> list[MedicationNode]: ...
+    def current_allergies(self, patient_id: UUID) -> list[AllergyNode]: ...
+    def recent_observations(self, patient_id: UUID, *, limit: int) -> list[ObservationNode]: ...
 
 
 class InMemoryPSGStore:
@@ -43,6 +80,11 @@ class InMemoryPSGStore:
         self._deviations: list[DeviationNode] = []
         self._events: list[EventNode] = []
         self._forecasts: list[ForecastNode] = []
+        self._documents: list[DocumentNode] = []
+        self._conditions: list[ConditionNode] = []
+        self._medications: list[MedicationNode] = []
+        self._allergies: list[AllergyNode] = []
+        self._observations: list[ObservationNode] = []
 
     def add_baseline(self, node: BaselineNode) -> None:
         self._baselines = [
@@ -64,6 +106,21 @@ class InMemoryPSGStore:
 
     def add_forecast(self, node: ForecastNode) -> None:
         self._forecasts.append(node)
+
+    def add_document(self, node: DocumentNode) -> None:
+        self._documents.append(node)
+
+    def add_condition(self, node: ConditionNode) -> None:
+        self._conditions.append(node)
+
+    def add_medication(self, node: MedicationNode) -> None:
+        self._medications.append(node)
+
+    def add_allergy(self, node: AllergyNode) -> None:
+        self._allergies.append(node)
+
+    def add_observation(self, node: ObservationNode) -> None:
+        self._observations.append(node)
 
     def current_baseline(
         self, patient_id: UUID, metric_code: str, context: str
@@ -109,3 +166,17 @@ class InMemoryPSGStore:
             if key not in latest or f.generated_at > latest[key].generated_at:
                 latest[key] = f
         return list(latest.values())
+
+    def current_conditions(self, patient_id: UUID) -> list[ConditionNode]:
+        return _latest_by_key(self._conditions, patient_id, lambda n: n.snomed_code)
+
+    def current_medications(self, patient_id: UUID) -> list[MedicationNode]:
+        return _latest_by_key(self._medications, patient_id, lambda n: n.rxnorm_code)
+
+    def current_allergies(self, patient_id: UUID) -> list[AllergyNode]:
+        return _latest_by_key(self._allergies, patient_id, lambda n: n.substance_code)
+
+    def recent_observations(self, patient_id: UUID, *, limit: int) -> list[ObservationNode]:
+        obs = [o for o in self._observations if o.patient_id == patient_id]
+        obs.sort(key=lambda o: (o.ts, o.id.int), reverse=True)
+        return obs[:limit]

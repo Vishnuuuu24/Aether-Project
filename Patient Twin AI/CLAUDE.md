@@ -30,9 +30,9 @@ There is exactly one repo. **Do not create a Mac version and a server version.**
 ### Inference backend (abstracted by `LLMGateway`)
 | | Local dev/demo (MacBook M5 Pro 48GB) | Production (NVIDIA H200 slice) |
 |---|---|---|
-| LLM server | `mlx-lm` on the **macOS host** (Metal can't enter Docker) | `vLLM` (CUDA), host or container |
+| LLM server | **LM Studio** (or `mlx-lm`) on the **macOS host**, port 1234 (Metal can't enter Docker) | `vLLM` (CUDA), host or container |
 | Quantization | 4-bit | fp8 preferred (4-bit fallback) |
-| Switch | `LLM_GATEWAY_BASE_URL` → host mlx-lm | `LLM_GATEWAY_BASE_URL` → vLLM |
+| Switch | `LLM_GATEWAY_BASE_URL` → `host.docker.internal:1234` (LM Studio) | `LLM_GATEWAY_BASE_URL` → vLLM |
 The rest of the stack (Postgres, Qdrant, all services) is identical and runs in Docker on both. See `docs/08`.
 
 ### Everything non-LLM runs on the Mac unchanged

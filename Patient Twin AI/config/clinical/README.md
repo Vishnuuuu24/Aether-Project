@@ -12,6 +12,7 @@ and clearly labelled — never a fabricated default.
 | `sqi_thresholds.yaml` | Per-metric minimum SQI to enter the baseline (docs/05 §3) | `ai/features` `SqiGate` (T1.2) | Metric never passes the gate → nothing enters its baseline |
 | `population_reference_ranges.yaml` | Age/sex cold-start ranges, the *labelled* population fallback (docs/05 §4.1) | `ai/baseline` (T1.3) | No population fallback available → baseline stays unavailable until personalised |
 | `event_rules.yaml` | Co-occurrence + persistence + red-flag rules for the Event Engine (docs/05 §6) | `services/event_engine` (T2.1) | No rules → no events raised (fail-safe) |
+| `coding_thresholds.yaml` | Per-entity-type confidence to auto-`commit` a coded entity vs leave it `proposed` (docs/04 §4) | `services/doc_coding_service` (T3.1) | No threshold → every coded entity stays `proposed` (fail-safe) |
 
 > These are the **population's** numbers, used only as a labelled cold-start fallback.
 > They are never presented to a patient as "your normal" (docs/05 §1, §4.1).

@@ -29,6 +29,7 @@ from .psg import (
     BaselineNode,
     ConditionNode,
     DeviationNode,
+    DocumentNode,
     EventNode,
     ForecastNode,
     MedicationNode,
@@ -55,6 +56,7 @@ __all__ = [
     "AllergyNode",
     "ObservationNode",
     "ForecastNode",
+    "DocumentNode",
     # outputs
     "OutputRecord",
 ]

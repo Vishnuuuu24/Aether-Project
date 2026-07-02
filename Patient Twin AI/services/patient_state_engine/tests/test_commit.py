@@ -22,7 +22,9 @@ from ._factories import (
     OCCURRED_AT,
     VERSIONS,
     baseline,
+    coded_result,
     deviation,
+    documents_consent,
     event_candidate,
     fallback_baseline,
     forecast,
@@ -272,6 +274,36 @@ def test_commit_forecast_requires_forecast_consent() -> None:
     with pytest.raises(ConsentError):
         engine.commit_forecast(forecast(pid))
     assert store.latest_forecasts(pid) == []
+
+
+def test_commit_coding_appends_nodes_with_status_and_audits() -> None:
+    pid = uuid4()
+    engine, store, audit = wired_engine(pid, consent=documents_consent())
+
+    commit = engine.commit_coding(coded_result(pid))
+
+    assert commit.document_node.created_by == "patient-state-engine"
+    assert len(commit.conditions) == 1 and commit.conditions[0].snomed_code == "44054006"
+    assert len(commit.medications) == 1 and commit.medications[0].rxnorm_code == "6809"
+    assert len(commit.observations) == 1
+    # Status carried through: committed condition, proposed (sub-threshold) observation.
+    assert commit.conditions[0].status == "committed"
+    assert commit.observations[0].status == "proposed"
+    # Provenance links back to the document.
+    assert commit.conditions[0].source_document_id == commit.document_node.id
+    # Every mutation audited; chain intact.
+    assert store.current_conditions(pid)[0].snomed_code == "44054006"
+    refs = [ref for r in audit.records for ref in r.output_refs]
+    assert f"document:{commit.document_node.id}" in refs
+    verify_chain(audit.records)
+
+
+def test_commit_coding_requires_documents_consent() -> None:
+    pid = uuid4()
+    engine, store, _ = wired_engine(pid, consent=vitals_consent())  # no DOCUMENTS
+    with pytest.raises(ConsentError):
+        engine.commit_coding(coded_result(pid))
+    assert store.current_conditions(pid) == []
 
 
 def test_naive_occurred_at_rejected() -> None:

@@ -85,6 +85,7 @@ class AllergyNode(VersionedMixin, Base):
     reaction: Mapped[str] = mapped_column(String, nullable=False)
     severity: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default="committed")
 
 
 class ObservationNode(VersionedMixin, Base):
@@ -96,6 +97,7 @@ class ObservationNode(VersionedMixin, Base):
     unit: Mapped[str] = mapped_column(String, nullable=False)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_document_id: Mapped[UUID | None] = mapped_column(Uuid)
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default="committed")
 
 
 class ForecastNode(VersionedMixin, Base):
@@ -107,3 +109,12 @@ class ForecastNode(VersionedMixin, Base):
     intervals: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     method: Mapped[str] = mapped_column(String, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DocumentNode(VersionedMixin, Base):
+    __tablename__ = "document_node"
+
+    doc_type: Mapped[str] = mapped_column(String, nullable=False)
+    uri: Mapped[str | None] = mapped_column(String)
+    ocr_ref: Mapped[str | None] = mapped_column(String)
+    codes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)

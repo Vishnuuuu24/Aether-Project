@@ -92,6 +92,7 @@ class AllergyNode(VersionedNode):
     reaction: str
     severity: str
     source: str
+    status: str = "committed"  # proposed | committed (docs/04 §4)
 
 
 class ObservationNode(VersionedNode):
@@ -101,6 +102,7 @@ class ObservationNode(VersionedNode):
     unit: str
     ts: datetime
     source_document_id: UUID | None = None
+    status: str = "committed"  # proposed | committed (docs/04 §4)
 
 
 class ForecastNode(VersionedNode):
@@ -110,6 +112,17 @@ class ForecastNode(VersionedNode):
     intervals: list[tuple[float, float]]
     method: str
     generated_at: datetime
+
+
+class DocumentNode(VersionedNode):
+    """Provenance for a coded document (docs/02 §4.1, docs/04 §4). Coded clinical
+    nodes reference it via `source_document_id`.
+    """
+
+    doc_type: str
+    uri: str | None = None
+    ocr_ref: str | None = None
+    codes: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,9 @@ from ._factories import (
     OCCURRED_AT,
     VERSIONS,
     baseline,
+    coded_result,
     deviation,
+    documents_consent,
     event_candidate,
     forecast,
     forecast_consent,
@@ -148,6 +150,36 @@ def test_forecast_persists_and_reads_back(scratch_db_url: str) -> None:
     assert forecasts[0].points == [60.0, 61.0, 62.0]
     # intervals survive the JSONB round-trip as (lower, upper) tuples.
     assert forecasts[0].intervals[0] == (58.0, 62.0)
+
+
+def test_coded_document_persists_and_reads_back(scratch_db_url: str) -> None:
+    engine = create_engine(scratch_db_url)
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    pid = uuid4()
+    consent_provider = StaticConsentProvider()
+    consent_provider.grant(pid, documents_consent())
+
+    with session_factory() as session:
+        state = PatientStateEngine(
+            store=SqlAlchemyPSGStore(session),
+            consent_provider=consent_provider,
+            audit_writer=AuditWriter(SqlAlchemyAuditStore(session)),
+            versions=VERSIONS,
+            clock=lambda: OCCURRED_AT,
+        )
+        commit = state.commit_coding(coded_result(pid))
+        session.commit()
+
+    with session_factory() as session:
+        store = SqlAlchemyPSGStore(session)
+        conditions = store.current_conditions(pid)
+        observations = store.recent_observations(pid, limit=10)
+    engine.dispose()
+
+    assert [c.snomed_code for c in conditions] == ["44054006"]
+    assert conditions[0].source_document_id == commit.document_node.id
+    assert observations[0].status == "proposed"  # sub-threshold survived the round-trip
 
 
 def test_new_version_supersedes_prior_in_db(scratch_db_url: str) -> None:
