@@ -95,7 +95,10 @@ class DeviationResult(BaseModel):
 
     `confidence_calibrated` is False in v1: confidence is a heuristic and must not be
     presented as calibrated until the calibration harness lands (docs/05 §5, §9; T5.2).
-    `baseline_ref` is filled by the state engine once the BaselineNode is persisted.
+    `baseline_ref` is an optional convenience pointer to the persisted BaselineNode.
+    On the persistence path the authoritative link is `DeviationNode.baseline_id`,
+    which the state engine sets when it commits the deviation; `baseline_ref` on this
+    transient scoring result stays None unless a caller chooses to populate it.
     """
 
     reading_id: UUID
