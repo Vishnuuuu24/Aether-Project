@@ -38,6 +38,29 @@ class DeviationMagnitude(str, Enum):
     MARKED = "marked"  # |z| >= 4.5
 
 
+# Default |z_robust| magnitude bucket edges (docs/05 §5). Statistical, not clinical.
+MAGNITUDE_EDGES = (2.0, 3.0, 4.5)
+# Ordering for "at least this severe" comparisons.
+MAGNITUDE_RANK: dict[DeviationMagnitude, int] = {
+    DeviationMagnitude.NORMAL: 0,
+    DeviationMagnitude.MILD: 1,
+    DeviationMagnitude.MODERATE: 2,
+    DeviationMagnitude.MARKED: 3,
+}
+
+
+def magnitude_bucket(abs_z: float) -> DeviationMagnitude:
+    """Bucket a |z_robust| value using the doc-specified default edges (docs/05 §5)."""
+    mild, moderate, marked = MAGNITUDE_EDGES
+    if abs_z < mild:
+        return DeviationMagnitude.NORMAL
+    if abs_z < moderate:
+        return DeviationMagnitude.MILD
+    if abs_z < marked:
+        return DeviationMagnitude.MODERATE
+    return DeviationMagnitude.MARKED
+
+
 class PopulationRange(BaseModel):
     """An age/sex population reference range — the labelled cold-start fallback
     (docs/05 §4.1). Values are clinical config, never fabricated by the engine.

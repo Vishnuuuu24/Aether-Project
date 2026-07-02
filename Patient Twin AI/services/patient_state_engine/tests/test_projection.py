@@ -20,6 +20,9 @@ from ._factories import (
     VERSIONS,
     baseline,
     deviation,
+    event_candidate,
+    forecast,
+    forecast_consent,
     profile,
     vitals_consent,
 )
@@ -107,6 +110,53 @@ def test_projection_profile_not_found() -> None:
     engine, _ = _engine(pid, vitals_consent(), seed_profile=False)
     with pytest.raises(ProfileNotFoundError):
         engine.build_projection(pid)
+
+
+def test_projection_surfaces_active_events_under_vitals() -> None:
+    # Events reach the LLM only via the projection (docs/05 §6) — never patient-direct.
+    pid = uuid4()
+    engine, _ = _engine(pid, vitals_consent())
+    engine.commit_event(event_candidate(pid))
+
+    proj = engine.build_projection(pid)
+    assert len(proj.active_events) == 1
+    assert proj.active_events[0].type == "physiological_stress/possible_illness"
+
+
+def test_projection_surfaces_forecasts_under_forecast_scope() -> None:
+    pid = uuid4()
+    engine, _ = _engine(pid, forecast_consent())
+    engine.commit_forecast(forecast(pid))
+
+    proj = engine.build_projection(pid)
+    assert "forecast" in proj.consent_scope
+    assert len(proj.latest_forecasts) == 1
+    assert proj.latest_forecasts[0].horizon_days == 3
+
+
+def test_projection_withholds_forecasts_without_forecast_scope() -> None:
+    # Commit a forecast, then drop the FORECAST scope: it must be withheld.
+    pid = uuid4()
+    store = InMemoryPSGStore()
+    consent_provider = StaticConsentProvider()
+    consent_provider.grant(pid, forecast_consent())
+    profile_provider = StaticProfileProvider()
+    profile_provider.put(profile(pid))
+    engine = PatientStateEngine(
+        store=store,
+        consent_provider=consent_provider,
+        audit_writer=AuditWriter(InMemoryAuditStore()),
+        versions=VERSIONS,
+        profile_provider=profile_provider,
+        clock=lambda: OCCURRED_AT,
+    )
+    engine.commit_forecast(forecast(pid))
+    assert len(engine.build_projection(pid).latest_forecasts) == 1
+
+    consent_provider.grant(pid, vitals_consent())  # FORECAST scope dropped
+    proj = engine.build_projection(pid)
+    assert proj.consent_scope == ["vitals"]
+    assert proj.latest_forecasts == []
 
 
 def test_projection_carries_no_raw_signals() -> None:

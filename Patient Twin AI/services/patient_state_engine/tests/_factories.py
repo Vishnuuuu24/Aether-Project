@@ -15,8 +15,10 @@ from schemas.baseline import (
     DeviationResult,
 )
 from schemas.consent import Consent, ConsentScope
+from schemas.event import EventCandidate, EventStatus
+from schemas.forecast import Forecast
 from schemas.patient import PatientProfile, SexAtBirth
-from schemas.psg import DeviationDirection
+from schemas.psg import DeviationDirection, EventSeverity
 from schemas.reading import MeasurementContext, MetricCode
 from services.patient_state_engine.consent import StaticConsentProvider
 from services.patient_state_engine.profile import StaticProfileProvider
@@ -91,9 +93,46 @@ def deviation(
     return DeviationResult(**data)
 
 
+def event_candidate(patient_id: UUID, **overrides: Any) -> EventCandidate:
+    data: dict[str, Any] = {
+        "patient_id": patient_id,
+        "type": "physiological_stress/possible_illness",
+        "severity": EventSeverity.MODERATE,
+        "status": EventStatus.ACTIVE,
+        "onset_ts": OCCURRED_AT,
+        "contributing_deviation_ids": [uuid4(), uuid4()],
+        "rule_id": "stress-1",
+    }
+    data.update(overrides)
+    return EventCandidate(**data)
+
+
+def forecast(patient_id: UUID, **overrides: Any) -> Forecast:
+    data: dict[str, Any] = {
+        "patient_id": patient_id,
+        "metric_code": MetricCode.HEART_RATE,
+        "context": MeasurementContext.RESTING,
+        "horizon_days": 3,
+        "points": [60.0, 61.0, 62.0],
+        "intervals": [(58.0, 62.0), (57.0, 65.0), (56.0, 68.0)],
+        "method": "holt_linear",
+        "forecaster_version": "holt-linear-v1",
+    }
+    data.update(overrides)
+    return Forecast(**data)
+
+
 def vitals_consent() -> Consent:
     return Consent(
         scope=[ConsentScope.VITALS],
+        version="v1",
+        granted_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def forecast_consent() -> Consent:
+    return Consent(
+        scope=[ConsentScope.VITALS, ConsentScope.FORECAST],
         version="v1",
         granted_at=datetime(2026, 1, 1, tzinfo=UTC),
     )

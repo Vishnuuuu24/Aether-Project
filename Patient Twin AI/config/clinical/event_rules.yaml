@@ -1,0 +1,27 @@
+# Event Engine co-occurrence rules (docs/05 §6).
+#
+# Deterministic, versioned rules that combine single-metric deviations into candidate
+# multi-metric events. A rule fires when EACH condition is met by at least
+# `persistence_count` matching deviations within `window_minutes` (transient spikes
+# are suppressed) — unless `acute_red_flag: true`, which a single reading may raise.
+#
+# ⚠️  SET WITH CLINICAL INPUT — intentionally UNSET (no rules). While empty, the
+#     Event Engine raises NO events (fail-safe). Do not invent co-occurrence rules,
+#     event types, windows, or persistence counts here — a clinician defines them.
+#     Rules change only via a human-gated, versioned release (no closed-loop edits).
+#
+# Shape (to be finalised with clinical input):
+#   version: <ruleset-version>
+#   rules:
+#     - id: <rule_id>                 # set with clinical input
+#       event_type: <type>            # advisory label, never a diagnosis
+#       window_minutes: <int>         # set with clinical input
+#       persistence_count: <int>      # min matching readings per condition (>=1)
+#       acute_red_flag: false         # true bypasses persistence (single reading)
+#       conditions:
+#         - metric_code: <metric>     # e.g. heart_rate
+#           direction: up|down
+#           min_magnitude: mild|moderate|marked
+
+version: unset
+rules: []   # set with clinical input

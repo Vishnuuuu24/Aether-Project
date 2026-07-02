@@ -23,7 +23,10 @@ from ._factories import (
     VERSIONS,
     baseline,
     deviation,
+    event_candidate,
     fallback_baseline,
+    forecast,
+    forecast_consent,
     vitals_consent,
     wired_engine,
 )
@@ -218,6 +221,57 @@ def test_store_scopes_by_patient_and_key() -> None:
     assert len(store.current_baselines(p2)) == 1  # per-patient isolation
     assert len(store.recent_deviations(p1, limit=10)) == 2
     assert len(store.recent_deviations(p2, limit=10)) == 1
+
+
+def test_commit_event_appends_and_audits() -> None:
+    pid = uuid4()
+    engine, store, audit = wired_engine(pid, consent=vitals_consent())
+
+    node = engine.commit_event(event_candidate(pid))
+
+    assert node.status == "active"
+    assert node.created_by == "patient-state-engine"
+    active = store.active_events(pid)
+    assert len(active) == 1 and active[0].id == node.id
+    # Audited as a PSG mutation, chain intact, event + rule referenced.
+    assert AuditAction.STATE_COMMIT in [r.action for r in audit.records]
+    refs = [ref for r in audit.records for ref in r.output_refs]
+    assert f"event:{node.id}" in refs
+    assert any("rule:stress-1" in ref for r in audit.records for ref in r.input_refs)
+    verify_chain(audit.records)
+
+
+def test_commit_event_without_consent_denied() -> None:
+    pid = uuid4()
+    engine, store, audit = wired_engine(pid, consent=None)
+    with pytest.raises(ConsentError):
+        engine.commit_event(event_candidate(pid))
+    assert store.active_events(pid) == []
+    assert audit.records == []
+
+
+def test_commit_forecast_appends_and_audits() -> None:
+    pid = uuid4()
+    engine, store, audit = wired_engine(pid, consent=forecast_consent())
+
+    node = engine.commit_forecast(forecast(pid))
+
+    assert node.created_by == "patient-state-engine"
+    assert node.horizon_days == 3
+    forecasts = store.latest_forecasts(pid)
+    assert len(forecasts) == 1 and forecasts[0].id == node.id
+    refs = [ref for r in audit.records for ref in r.output_refs]
+    assert f"forecast:{node.id}" in refs
+    verify_chain(audit.records)
+
+
+def test_commit_forecast_requires_forecast_consent() -> None:
+    # VITALS-only consent must NOT be able to commit a forecast (separate scope).
+    pid = uuid4()
+    engine, store, _ = wired_engine(pid, consent=vitals_consent())
+    with pytest.raises(ConsentError):
+        engine.commit_forecast(forecast(pid))
+    assert store.latest_forecasts(pid) == []
 
 
 def test_naive_occurred_at_rejected() -> None:

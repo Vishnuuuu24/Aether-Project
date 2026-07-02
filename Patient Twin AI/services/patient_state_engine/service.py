@@ -29,8 +29,10 @@ from core.versioning import VersionSet
 from schemas.audit import AuditAction, AuditActor
 from schemas.baseline import Baseline, BaselineAvailability, DeviationMagnitude, DeviationResult
 from schemas.consent import ConsentScope
+from schemas.event import EventCandidate
+from schemas.forecast import Forecast
 from schemas.patient import PatientProfile
-from schemas.psg import BaselineNode, DeviationNode, PSGProjection
+from schemas.psg import BaselineNode, DeviationNode, EventNode, ForecastNode, PSGProjection
 
 from .consent import ConsentProvider
 from .profile import ProfileProvider
@@ -202,6 +204,76 @@ class PatientStateEngine:
             output_refs=output_refs,
             versions=self._versions.as_dict(),
         )
+
+    def commit_event(
+        self, candidate: EventCandidate, *, occurred_at: datetime | None = None
+    ) -> EventNode:
+        """Commit an Event Engine candidate as an append-only, audited EventNode
+        (docs/05 §6). Consent-gated on VITALS. Events feed the LLM / Policy Engine —
+        they are never surfaced to the patient directly.
+        """
+        created_at = occurred_at or candidate.onset_ts
+        if created_at.tzinfo is None:
+            raise ValueError("occurred_at must be timezone-aware")
+        consent = self._consent.get_consent(candidate.patient_id)
+        require_consent(consent, ConsentScope.VITALS, patient_id=candidate.patient_id)
+
+        node = EventNode(
+            patient_id=candidate.patient_id,
+            version=1,
+            supersedes=None,
+            created_at=created_at,
+            created_by=ACTOR_NAME,
+            type=candidate.type,
+            severity=candidate.severity,
+            status=candidate.status.value,
+            onset_ts=candidate.onset_ts,
+            contributing_deviation_ids=candidate.contributing_deviation_ids,
+        )
+        self._store.add_event(node)
+        self._write_audit(
+            candidate.patient_id,
+            AuditAction.STATE_COMMIT,
+            input_refs=[f"rule:{candidate.rule_id}"]
+            + [f"deviation:{dev_id}" for dev_id in candidate.contributing_deviation_ids],
+            output_refs=[f"event:{node.id}"],
+        )
+        return node
+
+    def commit_forecast(
+        self, forecast: Forecast, *, generated_at: datetime | None = None
+    ) -> ForecastNode:
+        """Commit a forecast as an append-only, audited ForecastNode (docs/05 §7).
+        Consent-gated on FORECAST (the patient opts into forecasting separately).
+        Forecasts are decision support surfaced via the projection — never a diagnosis.
+        """
+        created_at = generated_at or forecast.generated_at or self._clock()
+        if created_at.tzinfo is None:
+            raise ValueError("generated_at must be timezone-aware")
+        consent = self._consent.get_consent(forecast.patient_id)
+        require_consent(consent, ConsentScope.FORECAST, patient_id=forecast.patient_id)
+
+        node = ForecastNode(
+            patient_id=forecast.patient_id,
+            version=1,
+            supersedes=None,
+            created_at=created_at,
+            created_by=ACTOR_NAME,
+            metric_code=forecast.metric_code,
+            horizon_days=forecast.horizon_days,
+            points=forecast.points,
+            intervals=forecast.intervals,
+            method=forecast.method,
+            generated_at=created_at,
+        )
+        self._store.add_forecast(node)
+        self._write_audit(
+            forecast.patient_id,
+            AuditAction.STATE_COMMIT,
+            input_refs=[f"forecaster:{forecast.forecaster_version}"],
+            output_refs=[f"forecast:{node.id}"],
+        )
+        return node
 
     # -- read ----------------------------------------------------------------
 

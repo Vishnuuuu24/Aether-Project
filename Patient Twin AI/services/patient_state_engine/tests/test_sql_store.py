@@ -19,7 +19,16 @@ from services.patient_state_engine.consent import StaticConsentProvider
 from services.patient_state_engine.service import PatientStateEngine
 from services.patient_state_engine.sql_store import SqlAlchemyPSGStore
 
-from ._factories import OCCURRED_AT, VERSIONS, baseline, deviation, vitals_consent
+from ._factories import (
+    OCCURRED_AT,
+    VERSIONS,
+    baseline,
+    deviation,
+    event_candidate,
+    forecast,
+    forecast_consent,
+    vitals_consent,
+)
 
 
 def _to_record(row: object) -> AuditRecord:
@@ -80,6 +89,65 @@ def test_relational_psg_persists_and_reads_back(scratch_db_url: str) -> None:
     engine.dispose()
     assert len(records) == 2  # baseline_update + state_commit
     verify_chain(records)
+
+
+def test_event_persists_and_reads_back(scratch_db_url: str) -> None:
+    engine = create_engine(scratch_db_url)
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    pid = uuid4()
+    consent_provider = StaticConsentProvider()
+    consent_provider.grant(pid, vitals_consent())
+
+    with session_factory() as session:
+        state = PatientStateEngine(
+            store=SqlAlchemyPSGStore(session),
+            consent_provider=consent_provider,
+            audit_writer=AuditWriter(SqlAlchemyAuditStore(session)),
+            versions=VERSIONS,
+            clock=lambda: OCCURRED_AT,
+        )
+        node = state.commit_event(event_candidate(pid))
+        session.commit()
+
+    with session_factory() as session:
+        events = SqlAlchemyPSGStore(session).active_events(pid)
+    engine.dispose()
+
+    assert len(events) == 1
+    assert events[0].id == node.id
+    assert events[0].status == "active"
+    assert len(events[0].contributing_deviation_ids) == 2
+
+
+def test_forecast_persists_and_reads_back(scratch_db_url: str) -> None:
+    engine = create_engine(scratch_db_url)
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    pid = uuid4()
+    consent_provider = StaticConsentProvider()
+    consent_provider.grant(pid, forecast_consent())
+
+    with session_factory() as session:
+        state = PatientStateEngine(
+            store=SqlAlchemyPSGStore(session),
+            consent_provider=consent_provider,
+            audit_writer=AuditWriter(SqlAlchemyAuditStore(session)),
+            versions=VERSIONS,
+            clock=lambda: OCCURRED_AT,
+        )
+        node = state.commit_forecast(forecast(pid))
+        session.commit()
+
+    with session_factory() as session:
+        forecasts = SqlAlchemyPSGStore(session).latest_forecasts(pid)
+    engine.dispose()
+
+    assert len(forecasts) == 1
+    assert forecasts[0].id == node.id
+    assert forecasts[0].points == [60.0, 61.0, 62.0]
+    # intervals survive the JSONB round-trip as (lower, upper) tuples.
+    assert forecasts[0].intervals[0] == (58.0, 62.0)
 
 
 def test_new_version_supersedes_prior_in_db(scratch_db_url: str) -> None:

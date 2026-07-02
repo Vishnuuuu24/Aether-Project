@@ -16,17 +16,21 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from schemas.psg import BaselineNode, DeviationNode
+from schemas.psg import BaselineNode, DeviationNode, EventNode, ForecastNode
 
 
 class PSGStore(Protocol):
     def add_baseline(self, node: BaselineNode) -> None: ...
     def add_deviation(self, node: DeviationNode) -> None: ...
+    def add_event(self, node: EventNode) -> None: ...
+    def add_forecast(self, node: ForecastNode) -> None: ...
     def current_baseline(
         self, patient_id: UUID, metric_code: str, context: str
     ) -> BaselineNode | None: ...
     def current_baselines(self, patient_id: UUID) -> list[BaselineNode]: ...
     def recent_deviations(self, patient_id: UUID, *, limit: int) -> list[DeviationNode]: ...
+    def active_events(self, patient_id: UUID) -> list[EventNode]: ...
+    def latest_forecasts(self, patient_id: UUID) -> list[ForecastNode]: ...
 
 
 class InMemoryPSGStore:
@@ -37,6 +41,8 @@ class InMemoryPSGStore:
     def __init__(self) -> None:
         self._baselines: list[BaselineNode] = []
         self._deviations: list[DeviationNode] = []
+        self._events: list[EventNode] = []
+        self._forecasts: list[ForecastNode] = []
 
     def add_baseline(self, node: BaselineNode) -> None:
         self._baselines = [
@@ -52,6 +58,12 @@ class InMemoryPSGStore:
 
     def add_deviation(self, node: DeviationNode) -> None:
         self._deviations.append(node)
+
+    def add_event(self, node: EventNode) -> None:
+        self._events.append(node)
+
+    def add_forecast(self, node: ForecastNode) -> None:
+        self._forecasts.append(node)
 
     def current_baseline(
         self, patient_id: UUID, metric_code: str, context: str
@@ -80,3 +92,20 @@ class InMemoryPSGStore:
         # id is a deterministic tiebreak on equal timestamps (matches the SQL store).
         devs.sort(key=lambda d: (d.created_at, d.id.int), reverse=True)
         return devs[:limit]
+
+    def active_events(self, patient_id: UUID) -> list[EventNode]:
+        events = [
+            e for e in self._events if e.patient_id == patient_id and e.status == "active"
+        ]
+        events.sort(key=lambda e: (e.onset_ts, e.id.int), reverse=True)
+        return events
+
+    def latest_forecasts(self, patient_id: UUID) -> list[ForecastNode]:
+        latest: dict[str, ForecastNode] = {}
+        for f in self._forecasts:
+            if f.patient_id != patient_id:
+                continue
+            key = f.metric_code.value
+            if key not in latest or f.generated_at > latest[key].generated_at:
+                latest[key] = f
+        return list(latest.values())

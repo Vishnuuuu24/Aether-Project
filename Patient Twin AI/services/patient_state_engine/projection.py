@@ -25,6 +25,10 @@ from schemas.psg import (
     BaselineSummary,
     DeviationNode,
     DeviationSummary,
+    EventNode,
+    EventSummary,
+    ForecastNode,
+    ForecastSummary,
     PSGProjection,
 )
 
@@ -45,6 +49,8 @@ def build_projection(
 
     baselines: list[BaselineSummary] = []
     recent_deviations: list[DeviationSummary] = []
+    active_events: list[EventSummary] = []
+    latest_forecasts: list[ForecastSummary] = []
     node_times: list[datetime] = []
 
     if ConsentScope.VITALS in granted:
@@ -52,10 +58,21 @@ def build_projection(
         baselines = [_baseline_summary(n) for n in current]
         devs = store.recent_deviations(patient_id, limit=deviation_limit)
         recent_deviations = [_deviation_summary(d) for d in devs]
-        node_times = [n.created_at for n in current] + [d.created_at for d in devs]
+        events = store.active_events(patient_id)
+        active_events = [_event_summary(e) for e in events]
+        node_times += (
+            [n.created_at for n in current]
+            + [d.created_at for d in devs]
+            + [e.created_at for e in events]
+        )
 
-    # DOCUMENTS / FORECAST sections are produced in later sprints; scoping them now
-    # keeps the projection correct once those nodes exist.
+    if ConsentScope.FORECAST in granted:
+        forecasts = store.latest_forecasts(patient_id)
+        latest_forecasts = [_forecast_summary(f) for f in forecasts]
+        node_times += [f.created_at for f in forecasts]
+
+    # DOCUMENTS sections (conditions/medications/allergies/observations) arrive in
+    # Sprint 3; scoping is applied when those nodes exist.
 
     as_of = max(node_times) if node_times else now
     return PSGProjection(
@@ -63,6 +80,8 @@ def build_projection(
         patient_sex_at_birth=profile.sex_at_birth.value,
         baselines=baselines,
         recent_deviations=recent_deviations,
+        active_events=active_events,
+        latest_forecasts=latest_forecasts,
         as_of=as_of,
         consent_scope=sorted(s.value for s in granted),
         versions=versions.projection_stamp(),
@@ -88,4 +107,17 @@ def _deviation_summary(node: DeviationNode) -> DeviationSummary:
         z_robust=node.z_robust,
         confidence=node.confidence,
         ts=node.created_at,
+    )
+
+
+def _event_summary(node: EventNode) -> EventSummary:
+    return EventSummary(type=node.type, severity=node.severity, onset_ts=node.onset_ts)
+
+
+def _forecast_summary(node: ForecastNode) -> ForecastSummary:
+    return ForecastSummary(
+        metric_code=node.metric_code,
+        horizon_days=node.horizon_days,
+        points=node.points,
+        intervals=node.intervals,
     )

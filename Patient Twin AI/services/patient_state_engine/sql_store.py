@@ -21,8 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from schemas.psg import BaselineNode as BaselineNodeSchema
-from schemas.psg import DeviationDirection
+from schemas.psg import DeviationDirection, EventSeverity
 from schemas.psg import DeviationNode as DeviationNodeSchema
+from schemas.psg import EventNode as EventNodeSchema
+from schemas.psg import ForecastNode as ForecastNodeSchema
 from schemas.reading import MeasurementContext, MetricCode
 
 
@@ -75,6 +77,78 @@ class SqlAlchemyPSGStore:
             )
         )
         self._session.flush()
+
+    def add_event(self, node: EventNodeSchema) -> None:
+        from core.db.models import EventNode as EventRow
+
+        self._session.add(
+            EventRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                type=node.type,
+                severity=node.severity.value,
+                status=node.status,
+                onset_ts=node.onset_ts,
+                contributing_deviation_ids=list(node.contributing_deviation_ids),
+            )
+        )
+        self._session.flush()
+
+    def active_events(self, patient_id: UUID) -> list[EventNodeSchema]:
+        from core.db.models import EventNode as EventRow
+
+        rows = (
+            self._session.execute(
+                select(EventRow)
+                .where(EventRow.patient_id == patient_id, EventRow.status == "active")
+                .order_by(EventRow.onset_ts.desc(), EventRow.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+        return [_event_to_schema(row) for row in rows]
+
+    def add_forecast(self, node: ForecastNodeSchema) -> None:
+        from core.db.models import ForecastNode as ForecastRow
+
+        self._session.add(
+            ForecastRow(
+                id=node.id,
+                patient_id=node.patient_id,
+                version=node.version,
+                supersedes=node.supersedes,
+                created_at=node.created_at,
+                created_by=node.created_by,
+                metric_code=node.metric_code.value,
+                horizon_days=node.horizon_days,
+                points=list(node.points),
+                intervals=[list(iv) for iv in node.intervals],
+                method=node.method,
+                generated_at=node.generated_at,
+            )
+        )
+        self._session.flush()
+
+    def latest_forecasts(self, patient_id: UUID) -> list[ForecastNodeSchema]:
+        from core.db.models import ForecastNode as ForecastRow
+
+        rows = (
+            self._session.execute(
+                select(ForecastRow)
+                .where(ForecastRow.patient_id == patient_id)
+                .order_by(ForecastRow.generated_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+        latest: dict[str, Any] = {}
+        for row in rows:  # ascending generated_at => last per metric wins
+            latest[row.metric_code] = row
+        return [_forecast_to_schema(row) for row in latest.values()]
 
     def current_baseline(
         self, patient_id: UUID, metric_code: str, context: str
@@ -143,6 +217,39 @@ def _baseline_to_schema(r: Any) -> BaselineNodeSchema:
         window_spec=r.window_spec,
         confidence=r.confidence,
         is_population_fallback=r.is_population_fallback,
+    )
+
+
+def _forecast_to_schema(r: Any) -> ForecastNodeSchema:
+    return ForecastNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        metric_code=MetricCode(r.metric_code),
+        horizon_days=r.horizon_days,
+        points=list(r.points),
+        intervals=[tuple(iv) for iv in r.intervals],
+        method=r.method,
+        generated_at=r.generated_at,
+    )
+
+
+def _event_to_schema(r: Any) -> EventNodeSchema:
+    return EventNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        type=r.type,
+        severity=EventSeverity(r.severity),
+        status=r.status,
+        onset_ts=r.onset_ts,
+        contributing_deviation_ids=list(r.contributing_deviation_ids),
     )
 
 
