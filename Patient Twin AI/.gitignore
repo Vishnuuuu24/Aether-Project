@@ -34,11 +34,12 @@ pgdata/
 qdrant_storage/
 minio_data/
 
-# --- Large replay datasets (download separately; keep README/manifests) ---
-datasets/**/*.pkl
-datasets/**/*.npy
-datasets/**/*.csv
-datasets/**/*.zip
+# --- Large datasets (download/fetch separately; keep only README/manifests) ---
+# See docs/13_Datasets.md. Ignore everything under datasets/, then re-allow the
+# per-dataset README so provenance/license/fetch-instructions stay in git.
+datasets/**
+!datasets/*/
+!datasets/*/README.md
 
 # --- OS / editor ---
 .DS_Store
