@@ -50,8 +50,12 @@ The non-negotiable architectural spine (do not refactor away):
 | 07 | `07_API_Specification.md` | FastAPI endpoints / OpenAPI contract |
 | 08 | `08_Docker_Stack.md` | docker-compose, services, vLLM routing, env, volumes |
 | 09 | `09_Repository_Blueprint.md` | Monorepo layout |
-| 10 | `10_Build_Backlog.md` | Ordered build tasks with per-task Definition of Done |
+| 10 | `10_Build_Backlog.md` | Ordered build tasks (Sprint 0–5) with per-task Definition of Done |
 | 11 | `11_Evaluation_Plan.md` | Benchmarks + validation ladder |
+| 12 | `12_Model_RAM_and_GPU_Sizing.md` | Model RAM / GPU / VRAM sizing |
+| 13 | `13_Datasets.md` | Datasets: sources, licences, on-disk status |
+| 14 | `14_Hardening_Runbook.md` | T5.3 hardening status: NFRs, §6 checklist, failure-mode verification |
+| 15 | `15_Post_v1_Backlog.md` | Post-v1 build backlog (Sprint 6+) — continues `10`, grounded in `07`/`08`/`11` |
 
 ## 5. Serving platforms (resolved)
 

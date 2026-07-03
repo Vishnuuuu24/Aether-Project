@@ -33,3 +33,8 @@ Ordered. Each task lists its Definition of Done (DoD). Do not start a task until
 
 ## Cross-cutting (every task)
 Audit events emitted; versions stamped; tests + lint pass; no PHI in prompts/logs/external paths; interfaces respected (no new call sites for deferred components).
+
+## Continuation
+Sprints 0–5 build the engines. Wiring them into a running, exposed, deployable
+system (integration, full API surface, edge/auth, real persistence, real-signal
+eval) continues in `15_Post_v1_Backlog.md` (Sprint 6+).
