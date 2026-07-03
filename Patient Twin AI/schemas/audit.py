@@ -27,6 +27,7 @@ class AuditAction(str, Enum):
     POLICY_DECISION = "policy_decision"
     OUTPUT = "output"
     CONSENT_CHANGE = "consent_change"
+    OUTCOME_CAPTURE = "outcome_capture"
 
 
 class AuditRecord(BaseModel):

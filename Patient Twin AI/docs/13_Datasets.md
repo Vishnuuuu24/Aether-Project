@@ -53,12 +53,15 @@ prerequisite. They're listed below as optional scale-up, not core.
 | Eval — retrieval IR | BEIR nfcorpus (`BeIR/nfcorpus`, HF) | 3.3 MB | CC BY-SA 4.0 | Yes |
 | Eval — general medical knowledge | MMLU clinical subjects (`cais/mmlu`, 5 configs) | <1 MB | MIT | Yes |
 
-**Fetched so far: ~3.6 GB** (guidelines, MedRAG textbooks, MIRAGE, MedMCQA,
-PubMedQA, MedQA-USMLE, nfcorpus, MMLU-clinical subset, ICD-10-CM, PMC-Patients,
-augmented-clinical-notes — all under `datasets/`). **Deferred: Sleep-EDF** (8.1 GB,
-PhysioNet-throttled, see its README). Everything else in this table needs one human
-action (license, account, or dataset-identity confirmation) before it's worth
-spending bandwidth on.
+**Present locally: ~57 GB.** The HuggingFace/CMS backbone (~3.6 GB: guidelines,
+MedRAG textbooks, MIRAGE, MedMCQA, PubMedQA, MedQA-USMLE, nfcorpus, MMLU-clinical
+subset, ICD-10-CM, PMC-Patients, augmented-clinical-notes) plus the two manually-
+downloaded wearable/onset corpora: **WESAD** (~16 GB, from UCI DOI 10.24432/C57K5T)
+and **MyPHD** (~37 GB — `Phase1` Mishra 2020 + `Phase2` Alavi 2021, the pre-symptomatic
+onset dataset that replaces the rejected Stanford Long-COVID PURL). All under
+`datasets/`, all gitignored (only per-folder READMEs are committed). **Deferred:
+Sleep-EDF** (8.1 GB, PhysioNet-throttled, see its README). Everything else in this
+table needs one human action (license, account, or DUA) before it's worth fetching.
 
 ## Corrections vs. the earlier AI-generated report
 

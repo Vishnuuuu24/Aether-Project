@@ -1,0 +1,35 @@
+# Policy Engine rules (docs/06). Deterministic gate configuration.
+#
+# The policy MECHANISM (ordered checks, first-hard-failure-wins) is code
+# (services/policy_engine/engine.py). The clinical VALUES below are config, and are
+# shipped UNSET (CLAUDE.md: never fabricate clinical content — thresholds, acute
+# patterns, or scope lexicons).
+#
+# ⚠️  SET WITH CLINICAL INPUT. While a section is unset, its check is INERT — with
+#     one deliberate exception: the STRUCTURAL red-flag rule that escalates on an
+#     already-clinical upstream signal (a HIGH-severity active Event, produced by the
+#     Event Engine's own clinician-defined rules) always runs. That reacts to a
+#     clinical decision made upstream; it does not invent a new threshold here.
+#
+# Rules are versioned and change only via human-gated releases (CLAUDE.md principle 5).
+
+version: unset
+
+# Acute patterns that force an escalation regardless of what the LLM proposed.
+# shape (set with clinical input):
+#   red_flags:
+#     - id: <rule_id>
+#       action: seek_urgent_care          # seek_care | seek_urgent_care
+#       any_active_event_type: [<type>]   # OR-match active events by type (optional)
+#       min_event_severity: high          # none | low | moderate | high (optional)
+red_flags: []
+
+# Per-output-type minimum confidence. Below the threshold => force abstain.
+# UNSET => confidence gate is OFF (uncalibrated; docs/05 §5). MUST be calibrated
+# before production. shape: {info: 0.x, flag: 0.x, guidance: 0.x}
+confidence_thresholds: {}
+
+# Terms whose presence in a user-facing message is a scope violation (diagnosis /
+# prescribing / dosing language). UNSET => scope-lexicon check inert (the structural
+# scope checks — closed recommended_action vocabulary — still run). shape: [term, …]
+prohibited_terms: []
