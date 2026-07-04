@@ -175,6 +175,21 @@ class SqlAlchemyPSGStore:
         )
         self._session.flush()
 
+    def recent_documents(self, patient_id: UUID, *, limit: int) -> list[DocumentNodeSchema]:
+        from core.db.models import DocumentNode as DocumentRow
+
+        rows = (
+            self._session.execute(
+                select(DocumentRow)
+                .where(DocumentRow.patient_id == patient_id)
+                .order_by(DocumentRow.created_at.desc(), DocumentRow.id.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return [_document_to_schema(r) for r in rows]
+
     def add_condition(self, node: ConditionNodeSchema) -> None:
         from core.db.models import ConditionNode as ConditionRow
 
@@ -440,6 +455,21 @@ def _observation_to_schema(r: Any) -> ObservationNodeSchema:
         ts=r.ts,
         source_document_id=r.source_document_id,
         status=r.status,
+    )
+
+
+def _document_to_schema(r: Any) -> DocumentNodeSchema:
+    return DocumentNodeSchema(
+        id=r.id,
+        patient_id=r.patient_id,
+        version=r.version,
+        supersedes=r.supersedes,
+        created_at=r.created_at,
+        created_by=r.created_by,
+        doc_type=r.doc_type,
+        uri=r.uri,
+        ocr_ref=r.ocr_ref,
+        codes=list(r.codes),
     )
 
 

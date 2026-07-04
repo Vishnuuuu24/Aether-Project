@@ -28,6 +28,7 @@ class AuditAction(str, Enum):
     OUTPUT = "output"
     CONSENT_CHANGE = "consent_change"
     OUTCOME_CAPTURE = "outcome_capture"
+    ESCALATION_ACK = "escalation_ack"
 
 
 class AuditRecord(BaseModel):

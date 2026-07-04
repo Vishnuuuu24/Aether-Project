@@ -187,6 +187,19 @@ class ForecastSummary(BaseModel):
     intervals: list[tuple[float, float]]
 
 
+class DocumentSummary(BaseModel):
+    """A document *reference* + its coding result for the read API (docs/07 §4).
+
+    Carries no OCR text and no raw signals — only the document type, the codes the
+    coder emitted, and when it was committed. Per-code confirmation status lives on
+    the coded entity nodes (surfaced via conditions/medications/observations).
+    """
+
+    doc_type: str
+    codes: list[str]
+    ts: datetime
+
+
 class VersionStamp(BaseModel):
     baseline_engine: str
     ruleset: str

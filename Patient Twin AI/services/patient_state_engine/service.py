@@ -37,15 +37,22 @@ from schemas.patient import PatientProfile
 from schemas.psg import (
     AllergyNode,
     BaselineNode,
+    BaselineSummary,
     ConditionNode,
     DeviationNode,
+    DeviationSummary,
     DocumentNode,
+    DocumentSummary,
     EventNode,
+    EventSummary,
     ForecastNode,
+    ForecastSummary,
     MedicationNode,
     ObservationNode,
+    ObservationSummary,
     PSGProjection,
 )
+from schemas.reading import MeasurementContext, MetricCode
 
 from .consent import ConsentProvider
 from .profile import ProfileProvider
@@ -427,6 +434,84 @@ class PatientStateEngine:
             now=self._clock(),
             deviation_limit=self._deviation_limit,
         )
+
+    # -- scoped reads (docs/07 §4) ------------------------------------------
+
+    def read_baselines(
+        self,
+        patient_id: UUID,
+        *,
+        metric: MetricCode | None = None,
+        context: MeasurementContext | None = None,
+    ) -> list[BaselineSummary]:
+        items = self._scoped_projection(patient_id, ConsentScope.VITALS).baselines
+        if metric is not None:
+            items = [b for b in items if b.metric_code == metric]
+        if context is not None:
+            items = [b for b in items if b.context == context]
+        return items
+
+    def read_deviations(
+        self, patient_id: UUID, *, since: datetime | None = None
+    ) -> list[DeviationSummary]:
+        items = self._scoped_projection(patient_id, ConsentScope.VITALS).recent_deviations
+        if since is not None:
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=UTC)
+            items = [d for d in items if d.ts >= since]
+        return items
+
+    def read_events(self, patient_id: UUID, *, status: str | None = None) -> list[EventSummary]:
+        items = self._scoped_projection(patient_id, ConsentScope.VITALS).active_events
+        # The projection surfaces only ACTIVE events (docs/05 §6 — events carry no
+        # patient-facing lifecycle state beyond "active" in v1), so a status filter
+        # can only be satisfied by "active".
+        if status is not None and status.lower() != "active":
+            return []
+        return items
+
+    def read_forecasts(
+        self,
+        patient_id: UUID,
+        *,
+        metric: MetricCode | None = None,
+        horizon: int | None = None,
+    ) -> list[ForecastSummary]:
+        items = self._scoped_projection(patient_id, ConsentScope.FORECAST).latest_forecasts
+        if metric is not None:
+            items = [f for f in items if f.metric_code == metric]
+        if horizon is not None:
+            items = [f for f in items if f.horizon_days == horizon]
+        return items
+
+    def read_observations(
+        self, patient_id: UUID, *, code: str | None = None
+    ) -> list[ObservationSummary]:
+        items = self._scoped_projection(patient_id, ConsentScope.DOCUMENTS).recent_observations
+        if code is not None:
+            items = [o for o in items if o.loinc_code == code]
+        return items
+
+    def read_documents(self, patient_id: UUID, *, limit: int = 20) -> list[DocumentSummary]:
+        self._require_read_scope(patient_id, ConsentScope.DOCUMENTS)
+        docs = self._store.recent_documents(patient_id, limit=limit)
+        return [
+            DocumentSummary(doc_type=d.doc_type, codes=list(d.codes), ts=d.created_at) for d in docs
+        ]
+
+    def _scoped_projection(self, patient_id: UUID, required: ConsentScope) -> PSGProjection:
+        self._require_read_scope(patient_id, required)
+        return self.build_projection(patient_id)
+
+    def _require_read_scope(self, patient_id: UUID, required: ConsentScope) -> None:
+        """404 before 403: an unknown patient is never disclosed as merely 'forbidden'.
+        Then the *specific* scope for the resource must be in force (deny-by-default),
+        not just any scope — accessing forecasts needs FORECAST, documents need
+        DOCUMENTS (docs/02 §2, docs/04 §5).
+        """
+        self._get_profile(patient_id)
+        consent = self._consent.get_consent(patient_id)
+        require_consent(consent, required, patient_id=patient_id)
 
     def _get_profile(self, patient_id: UUID) -> PatientProfile:
         if self._profiles is None:

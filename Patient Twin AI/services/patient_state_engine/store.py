@@ -33,9 +33,7 @@ from schemas.psg import (
 _N = TypeVar("_N", bound=VersionedNode)
 
 
-def _latest_by_key(
-    nodes: list[_N], patient_id: UUID, key: Callable[[_N], str]
-) -> list[_N]:
+def _latest_by_key(nodes: list[_N], patient_id: UUID, key: Callable[[_N], str]) -> list[_N]:
     """Current node per key for one patient = highest-version row per key."""
     latest: dict[str, _N] = {}
     for node in nodes:
@@ -64,6 +62,7 @@ class PSGStore(Protocol):
     def recent_deviations(self, patient_id: UUID, *, limit: int) -> list[DeviationNode]: ...
     def active_events(self, patient_id: UUID) -> list[EventNode]: ...
     def latest_forecasts(self, patient_id: UUID) -> list[ForecastNode]: ...
+    def recent_documents(self, patient_id: UUID, *, limit: int) -> list[DocumentNode]: ...
     def current_conditions(self, patient_id: UUID) -> list[ConditionNode]: ...
     def current_medications(self, patient_id: UUID) -> list[MedicationNode]: ...
     def current_allergies(self, patient_id: UUID) -> list[AllergyNode]: ...
@@ -151,9 +150,7 @@ class InMemoryPSGStore:
         return devs[:limit]
 
     def active_events(self, patient_id: UUID) -> list[EventNode]:
-        events = [
-            e for e in self._events if e.patient_id == patient_id and e.status == "active"
-        ]
+        events = [e for e in self._events if e.patient_id == patient_id and e.status == "active"]
         events.sort(key=lambda e: (e.onset_ts, e.id.int), reverse=True)
         return events
 
@@ -166,6 +163,11 @@ class InMemoryPSGStore:
             if key not in latest or f.generated_at > latest[key].generated_at:
                 latest[key] = f
         return list(latest.values())
+
+    def recent_documents(self, patient_id: UUID, *, limit: int) -> list[DocumentNode]:
+        docs = [d for d in self._documents if d.patient_id == patient_id]
+        docs.sort(key=lambda d: (d.created_at, d.id.int), reverse=True)
+        return docs[:limit]
 
     def current_conditions(self, patient_id: UUID) -> list[ConditionNode]:
         return _latest_by_key(self._conditions, patient_id, lambda n: n.snomed_code)
