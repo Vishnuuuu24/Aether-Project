@@ -1,0 +1,23 @@
+# Keep the build context tiny: never ship data, volumes, caches, or the venv to the
+# Docker daemon. The Dockerfiles COPY only schemas/ core/ ai/ services/ config/.
+datasets/
+volumes/
+.venv/
+venv/
+.git/
+.github/
+docs/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.env
+.env.*
+scratchpad/
+*.ipynb_checkpoints/
+.DS_Store

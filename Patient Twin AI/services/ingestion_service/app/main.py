@@ -24,9 +24,14 @@ from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from core.audit import AuditWriter, InMemoryAuditStore
+from core.audit.sql_store import SqlAlchemyAuditStore
+from core.db import request_session
+from core.observability import install_observability
 from schemas.reading import IngestBatchResult
+from services.patient_state_engine.wiring import SqlConsentProvider
 
 from ..adapters import fitbit, health_connect, healthkit
 from ..adapters.replay import stream_dataset
@@ -42,19 +47,29 @@ _ADAPTERS: dict[str, Callable[..., Iterator[dict[str, Any]]]] = {
 }
 
 app = FastAPI(title="patient-copilot-ingestion-service", version="0.0.1")
+install_observability(app, service="ingestion")
 
-# Dev wiring (in-memory). Production injects a Redis sink, a governance-backed
-# consent provider, and a Postgres-backed audit store.
+# Dev wiring (in-memory). In `postgres` mode the ingest audit goes to the shared
+# Postgres chain and consent is read from the consent table (config, not fork).
 _consent_provider = StaticConsentProvider()
+_sink = InMemoryReadingSink()
 _service = IngestionService(
     consent_provider=_consent_provider,
-    sink=InMemoryReadingSink(),
+    sink=_sink,
     audit_writer=AuditWriter(InMemoryAuditStore()),
 )
 
+_Session = Annotated[Session | None, Depends(request_session)]
 
-def get_service() -> IngestionService:
-    return _service
+
+def get_service(session: _Session) -> IngestionService:
+    if session is None:
+        return _service
+    return IngestionService(
+        consent_provider=SqlConsentProvider(session),
+        sink=_sink,
+        audit_writer=AuditWriter(SqlAlchemyAuditStore(session)),
+    )
 
 
 class WebhookPayload(BaseModel):

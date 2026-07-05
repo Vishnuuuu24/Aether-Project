@@ -11,6 +11,7 @@ part of the tamper-evident chain and joinable back to the outputs it references.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import UUID
 
 from core.audit import AuditWriter
@@ -24,14 +25,37 @@ _ACTOR_BY_SOURCE = {
 }
 
 
-class OutcomeStore:
-    def __init__(self, audit_writer: AuditWriter) -> None:
-        self._audit_writer = audit_writer
+class OutcomeRepo(Protocol):
+    """Where captured outcomes live. In-memory for dev, the `outcome` table in
+    production (`SqlOutcomeRepo`) — the repo is the seam."""
+
+    def save(self, outcome: Outcome) -> None: ...
+    def get(self, outcome_id: UUID) -> Outcome | None: ...
+    def for_patient(self, patient_id: UUID) -> list[Outcome]: ...
+
+
+class InMemoryOutcomeRepo:
+    def __init__(self) -> None:
         self._by_id: dict[UUID, Outcome] = {}
+
+    def save(self, outcome: Outcome) -> None:
+        self._by_id[outcome.outcome_id] = outcome
+
+    def get(self, outcome_id: UUID) -> Outcome | None:
+        return self._by_id.get(outcome_id)
+
+    def for_patient(self, patient_id: UUID) -> list[Outcome]:
+        return [o for o in self._by_id.values() if o.patient_id == patient_id]
+
+
+class OutcomeStore:
+    def __init__(self, audit_writer: AuditWriter, repo: OutcomeRepo | None = None) -> None:
+        self._audit_writer = audit_writer
+        self._repo = repo or InMemoryOutcomeRepo()
 
     def record(self, outcome: Outcome, *, now: datetime | None = None) -> Outcome:
         """Persist an outcome and audit the capture, linking it to prior outputs."""
-        self._by_id[outcome.outcome_id] = outcome
+        self._repo.save(outcome)
         self._audit_writer.write(
             patient_id=outcome.patient_id,
             actor=_ACTOR_BY_SOURCE[outcome.source],
@@ -44,7 +68,7 @@ class OutcomeStore:
         return outcome
 
     def get(self, outcome_id: UUID) -> Outcome | None:
-        return self._by_id.get(outcome_id)
+        return self._repo.get(outcome_id)
 
     def for_patient(self, patient_id: UUID) -> list[Outcome]:
-        return [o for o in self._by_id.values() if o.patient_id == patient_id]
+        return self._repo.for_patient(patient_id)

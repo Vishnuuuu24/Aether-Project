@@ -21,38 +21,56 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from core.audit import AuditWriter, InMemoryAuditStore
+from core.audit.sql_store import SqlAlchemyAuditStore
+from core.db import request_session
+from core.observability import install_observability
 from core.versioning import VersionRegistry
 from schemas.audit import AuditAction, AuditRecord
 from schemas.consent import Consent, ConsentScope
 from schemas.outcome import Outcome, OutcomeSource, OutcomeType
 
-from ..audit_query import query_audit
+from ..audit_query import AuditReader, query_audit
 from ..consent import ConsentLedger
 from ..outcomes import OutcomeStore
+from ..sql_stores import SqlConsentStore, SqlOutcomeRepo
 
 app = FastAPI(title="patient-copilot-governance-service", version="0.0.1")
+install_observability(app, service="governance")
 
 # Dev wiring (in-memory). ONE audit store so consent changes and outcome captures
-# share a single chain. Production swaps in the Postgres-backed store via DI.
+# share a single chain. In `postgres` mode the getters below build the same
+# components on a per-request transactional session instead (config, not fork).
 _audit_store = InMemoryAuditStore()
 _audit_writer = AuditWriter(_audit_store)
 _consent_ledger = ConsentLedger(_audit_writer)
 _outcome_store = OutcomeStore(_audit_writer)
 _versions = VersionRegistry.from_env()
 
-
-def get_consent_ledger() -> ConsentLedger:
-    return _consent_ledger
-
-
-def get_outcome_store() -> OutcomeStore:
-    return _outcome_store
+# FastAPI caches this per request, so consent + outcome + audit-read below share ONE
+# session/transaction/chain-append when DB-backed.
+_Session = Annotated[Session | None, Depends(request_session)]
 
 
-def get_audit_store() -> InMemoryAuditStore:
-    return _audit_store
+def get_consent_ledger(session: _Session) -> ConsentLedger:
+    if session is None:
+        return _consent_ledger
+    # Writes the consent ROW (visible to every SqlConsentProvider) + the audit record.
+    return ConsentLedger(AuditWriter(SqlAlchemyAuditStore(session)), store=SqlConsentStore(session))
+
+
+def get_outcome_store(session: _Session) -> OutcomeStore:
+    if session is None:
+        return _outcome_store
+    return OutcomeStore(AuditWriter(SqlAlchemyAuditStore(session)), repo=SqlOutcomeRepo(session))
+
+
+def get_audit_store(session: _Session) -> AuditReader:
+    if session is None:
+        return _audit_store
+    return SqlAlchemyAuditStore(session)
 
 
 def get_versions() -> VersionRegistry:
@@ -125,7 +143,7 @@ async def revoke_consent(
 
 @app.get("/v1/audit")
 async def get_audit(
-    store: Annotated[InMemoryAuditStore, Depends(get_audit_store)],
+    store: Annotated[AuditReader, Depends(get_audit_store)],
     patient_id: UUID | None = None,
     action: AuditAction | None = None,
     since: datetime | None = None,

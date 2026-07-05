@@ -53,21 +53,117 @@ services:
       - "9001:9001"
     networks: [hasa-net]
 
+  # Only the api-gateway is published; every other service is reachable only on the
+  # internal network, behind the gateway's auth/RBAC edge (docs/08 §6).
   api-gateway:
     build:
       context: .
-      dockerfile: services/api-gateway/Dockerfile
+      dockerfile: services/api_gateway/Dockerfile
     environment:
       DATABASE_URL: postgresql://hasa:${PG_PASSWORD}@postgres:5432/hasa
       QDRANT_URL: http://qdrant:6333
+      JWT_SECRET: ${JWT_SECRET}
+      STATE_ENGINE_URL: http://state-engine:8000
+      COPILOT_URL: http://copilot:8000
+      GOVERNANCE_URL: http://governance:8000
+      INGESTION_URL: http://ingestion:8000
+      DOC_CODING_URL: http://doc-coding:8000
     ports:
       - "8080:8080"
     depends_on:
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_started}
+      state-engine: {condition: service_started}
+      copilot: {condition: service_started}
+      governance: {condition: service_started}
+      ingestion: {condition: service_started}
+      doc-coding: {condition: service_started}
     networks: [hasa-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  # --- App services: one shared image (deploy/Dockerfile), selected per service by
+  #     the uvicorn command. Internal only (no published ports). ------------------
+  state-engine:
+    build: {context: ., dockerfile: deploy/Dockerfile}
+    command: ["uvicorn", "services.patient_state_engine.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: &app_env
+      DATABASE_URL: postgresql://hasa:${PG_PASSWORD}@postgres:5432/hasa
+      QDRANT_URL: http://qdrant:6333
+      PERSISTENCE_BACKEND: postgres
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_started}
+    networks: [hasa-net]
+    restart: unless-stopped
+    healthcheck: &app_healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy: &app_limits
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  copilot:
+    build: {context: ., dockerfile: deploy/Dockerfile}
+    command: ["uvicorn", "services.copilot_service.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app_env
+      # Local dev/demo: mlx-lm / LM Studio on the macOS host (Metal can't enter Docker).
+      LLM_GATEWAY_BASE_URL: ${LLM_GATEWAY_BASE_URL:-http://host.docker.internal:1234/v1}
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_started}
+    networks: [hasa-net]
+    restart: unless-stopped
+    healthcheck: *app_healthcheck
+    deploy: *app_limits
+
+  governance:
+    build: {context: ., dockerfile: deploy/Dockerfile}
+    command: ["uvicorn", "services.governance_service.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app_env
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_started}
+    networks: [hasa-net]
+    restart: unless-stopped
+    healthcheck: *app_healthcheck
+    deploy: *app_limits
+
+  ingestion:
+    build: {context: ., dockerfile: deploy/Dockerfile}
+    command: ["uvicorn", "services.ingestion_service.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app_env
+      REDIS_URL: redis://redis:6379
+      INGEST_ENABLE_REPLAY: "0"  # dev-only harness; off in the running stack
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+    networks: [hasa-net]
+    restart: unless-stopped
+    healthcheck: *app_healthcheck
+    deploy: *app_limits
+
+  doc-coding:
+    build: {context: ., dockerfile: deploy/Dockerfile}
+    command: ["uvicorn", "services.doc_coding_service.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app_env
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [hasa-net]
+    restart: unless-stopped
+    healthcheck: *app_healthcheck
+    deploy: *app_limits
 
   # ---------------------------------------------------------------------
   # GPU profile: ONLY valid on a Linux + NVIDIA host (e.g. the H200 slice).

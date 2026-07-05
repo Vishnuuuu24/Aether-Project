@@ -16,6 +16,7 @@ EXPECTED_TABLES = {
     "patient_profile",
     "consent",
     "audit_log",
+    "outcome",
     "version_registry",
     "reading_node",
     "baseline_node",

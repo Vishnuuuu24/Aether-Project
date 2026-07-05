@@ -15,7 +15,7 @@ from __future__ import annotations
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from schemas.audit import AuditRecord
+from schemas.audit import AuditAction, AuditActor, AuditRecord
 
 from .hashing import GENESIS_PREV_HASH
 
@@ -57,3 +57,29 @@ class SqlAlchemyAuditStore:
             )
         )
         self._session.flush()  # assign seq / surface integrity errors now
+
+    @property
+    def records(self) -> list[AuditRecord]:
+        """The whole chain in `seq` order — the `AuditReader` read port (docs/07 §7).
+        Lets `query_audit` / `verify_chain` run over Postgres exactly as over memory.
+        """
+        from sqlalchemy import select
+
+        from core.db.models import AuditLog
+
+        rows = self._session.execute(select(AuditLog).order_by(AuditLog.seq)).scalars().all()
+        return [
+            AuditRecord(
+                audit_id=row.audit_id,
+                patient_id=row.patient_id,
+                actor=AuditActor(row.actor),
+                action=AuditAction(row.action),
+                input_refs=list(row.input_refs),
+                output_refs=list(row.output_refs),
+                versions=dict(row.versions),
+                timestamp=row.timestamp,
+                prev_hash=row.prev_hash,
+                hash=row.hash,
+            )
+            for row in rows
+        ]

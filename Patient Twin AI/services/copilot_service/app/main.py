@@ -16,6 +16,7 @@ State Engine, retriever corpus, gateway backend, and DB-backed stores via DI.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
@@ -24,11 +25,22 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from ai.llm.gateway import Gateway
-from ai.retrieval import HashEmbedder, HybridRetriever, InMemoryVectorStore, LexicalReranker
+from ai.retrieval import (
+    HashEmbedder,
+    HybridRetriever,
+    InMemoryVectorStore,
+    LexicalReranker,
+    QdrantVectorStore,
+)
+from ai.retrieval.ports import VectorStore
 from core.audit import AuditWriter, InMemoryAuditStore
+from core.audit.sql_store import SqlAlchemyAuditStore
 from core.auth.errors import ConsentError
+from core.db import persistence_backend, request_session
+from core.observability import install_observability
 from core.versioning import VersionRegistry
 from schemas.consent import ConsentScope
 from schemas.output_contract import OutputContract, PolicyDecision
@@ -37,6 +49,7 @@ from services.patient_state_engine.consent import StaticConsentProvider
 from services.patient_state_engine.profile import StaticProfileProvider
 from services.patient_state_engine.service import PatientStateEngine, ProfileNotFoundError
 from services.patient_state_engine.store import InMemoryPSGStore
+from services.patient_state_engine.wiring import build_sql_engine
 from services.policy_engine.engine import PolicyEngine
 from services.policy_engine.rules import load_policy_rules
 
@@ -48,8 +61,10 @@ from ..escalation import (
     EscalationStatus,
 )
 from ..orchestrator import Copilot
+from ..output_store import SqlOutputStore
 
 app = FastAPI(title="patient-copilot-copilot-service", version="0.0.1")
+install_observability(app, service="copilot")
 
 _versions = VersionRegistry.from_env().current()
 _audit_writer = AuditWriter(InMemoryAuditStore())
@@ -62,29 +77,61 @@ _state_engine = PatientStateEngine(
     versions=_versions,
     profile_provider=StaticProfileProvider(),
 )
-# Empty-KB dev retriever (real HybridRetriever with deterministic dev adapters).
+
+
+# Empty-KB dev retriever (real HybridRetriever with deterministic dev adapters). The
+# retriever/gateway/policy are stateless and shared; only the audit sink (and the
+# projection source) become per-request + DB-backed in `postgres` mode.
+def _build_vector_store() -> VectorStore:
+    # Persist vectors to Qdrant in production posture; the in-memory cosine store
+    # drives dev + the fast suite. (No connection happens here: the empty dev KB is
+    # never upserted, and QdrantVectorStore connects lazily.)
+    url = os.environ.get("QDRANT_URL")
+    if persistence_backend() == "postgres" and url:
+        return QdrantVectorStore(url=url)
+    return InMemoryVectorStore()
+
+
 _retriever = HybridRetriever(
     corpus=[],
     embedder=HashEmbedder(),
     reranker=LexicalReranker(),
-    vector_store=InMemoryVectorStore(),
+    vector_store=_build_vector_store(),
 )
+_gateway = Gateway.from_config()
+_policy = PolicyEngine(load_policy_rules())
 _copilot = Copilot(
     retriever=_retriever,
-    gateway=Gateway.from_config(),
-    policy=PolicyEngine(load_policy_rules()),
+    gateway=_gateway,
+    policy=_policy,
     versions=_versions,
     audit_sink=AuditWriterSink(_audit_writer),
     escalation_sink=_escalation_queue,
 )
 
+# FastAPI caches this per request → the projection read and the output audit write
+# share ONE transaction / one chain append when DB-backed.
+_Session = Annotated[Session | None, Depends(request_session)]
 
-def get_state_engine() -> PatientStateEngine:
-    return _state_engine
+
+def get_state_engine(session: _Session) -> PatientStateEngine:
+    if session is None:
+        return _state_engine
+    return build_sql_engine(session, _versions)
 
 
-def get_copilot() -> Copilot:
-    return _copilot
+def get_copilot(session: _Session) -> Copilot:
+    if session is None:
+        return _copilot
+    return Copilot(
+        retriever=_retriever,
+        gateway=_gateway,
+        policy=_policy,
+        versions=_versions,
+        output_store=SqlOutputStore(session),
+        audit_sink=AuditWriterSink(AuditWriter(SqlAlchemyAuditStore(session))),
+        escalation_sink=_escalation_queue,
+    )
 
 
 def get_escalation_queue() -> EscalationQueue:

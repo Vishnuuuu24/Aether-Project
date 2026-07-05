@@ -14,9 +14,8 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-# Alembic migrations are generated artifacts; api-gateway is a hyphen-named dir
-# (not a Python package), checked only as a runtime skeleton.
-exclude = ["^core/db/migrations/", "^services/api-gateway/"]
+# Alembic migrations are generated artifacts (not hand-authored) — skip type checks.
+exclude = ["^core/db/migrations/"]
 
 # Tests aren't held to strict def/generic annotation rules (fixtures, helpers).
 [[tool.mypy.overrides]]

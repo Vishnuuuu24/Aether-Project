@@ -45,13 +45,20 @@ path against the real vLLM backend and record end-to-end p95.
 | Postgres + MinIO volumes on encrypted storage; TLS in front of api-gateway | **Ops-required** (infra, not code). |
 | Secrets via Docker secrets / vault, not `.env` | **Ops-required.** |
 | Network policy: only `llm-gateway` reaches host/external; only `api-gateway` exposed | Partially compose-expressed; enforce with the orchestrator's network policy. **Ops-required.** |
-| Resource limits + healthchecks + restart policy on every service | `healthz`/`readyz` exist on each service app; **compose still builds only `postgres`/`qdrant`/`redis`/`minio`/`api-gateway`.** Containerising the remaining app services (state-engine, ingestion, policy-engine, copilot, governance, …) with per-service Dockerfiles, resource limits and restart policies is the remaining infra step — deferred to the H200 bring-up alongside NFR-1. |
+| Resource limits + healthchecks + restart policy on every service | **DONE (T7.3).** Every app service (state-engine, copilot, governance, ingestion, doc-coding) has a compose entry built from the shared `deploy/Dockerfile`, each with a `/healthz` healthcheck, CPU/memory limits, and `restart: unless-stopped`; only `api-gateway` is published. Verified on the Mac: both images build, all five service apps import in-container, and a running container serves `/healthz` + `/metrics`. Full multi-service `docker compose up` against the live data stack is the server bring-up step. |
+| Prometheus `/metrics` + structured request logging, no PHI in logs | **DONE (T7.4).** `core.observability` gives every service `/metrics`, an `X-Trace-Id` on every response, and a structured JSON access log carrying only method / normalised path / status / duration / trace id (no body, query, or patient id). |
+| Edge auth: JWT + RBAC + patient ownership, RFC-7807 errors | **DONE (T7.1).** The `api-gateway` authenticates every `/v1` request, RBAC- and ownership-gates it, and forwards to the owning service; errors are `application/problem+json`. |
+| Global audit chain persists across restart, from every producer | **DONE (T7.2 + T7.2b).** `PERSISTENCE_BACKEND=postgres` config-switches the state-engine, **copilot, governance, and ingestion** to write the one hash-chained `audit_log` via a shared per-request transactional session (`core.db.request_session`). A restart test writes CONSENT_CHANGE + OUTCOME_CAPTURE + POLICY_DECISION + INGEST records, disposes the engine, re-opens, and confirms `verify_chain` still holds. |
+| Queryable row tables: consent history, outcomes, outputs | **DONE (T7.2c).** The consent ledger writes the `consent` row (a grant is now visible to every `SqlConsentProvider`), the outcome store writes the `outcome` row (new table, migration `0003_outcome`), and the copilot writes the `output` row — all behind config-switched store ports. A restart test asserts every row survives and reads back. Qdrant vector persistence is config-switched into the copilot retriever (exercised once a KB corpus is loaded). |
 
 ## 4. Remaining infra (deferred to server bring-up)
 
-- Per-service Dockerfiles + compose entries (only `api-gateway` has one today).
-- Real DB-backed wiring (services run in-memory dev wiring; production injects
-  Postgres/Qdrant stores via DI — the seams already exist).
-- NFR-1 end-to-end measurement against the real LLM on the H200.
+- **NFR-1 end-to-end latency** against the real LLM on the H200 (`‹GPU-DEP›`).
+- **TLS termination + secrets management** (Docker secrets / vault) and the
+  orchestrator **network policy** — ops concerns, not code.
+- Full multi-service `docker compose up` smoke against the live stack (image build +
+  per-service startup are verified; the end-to-end run is a server-side check).
 
-None of these are Mac-measurable; they are recorded here rather than faked.
+Persistence is no longer deferred: the Postgres-backed PSG, the **global audit chain
+(from every producer)**, and the **consent / outcome / output row tables** are all
+config-switchable and restart-verified on the Mac against real Postgres.

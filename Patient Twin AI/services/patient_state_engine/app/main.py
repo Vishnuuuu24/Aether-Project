@@ -4,13 +4,15 @@
 signals and no reading-level data (CLAUDE.md principle 2). Deny-by-default: a patient
 with no consent scope in force gets 403; an unknown patient gets 404.
 
-Dev wiring is in-memory. Production injects a Postgres-backed `SqlAlchemyPSGStore`
-+ `SqlAlchemyAuditStore` (sharing one transaction) and a governance-backed consent
-and profile provider.
+Persistence is config-switched, not forked (CLAUDE.md): `PERSISTENCE_BACKEND=memory`
+(default, dev) uses in-memory stores; `postgres` opens a per-request transactional
+session and binds the SAME engine to `SqlAlchemyPSGStore` + `SqlAlchemyAuditStore`
+and DB-backed consent/profile providers (docs/15 T7.2).
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -18,9 +20,11 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy.orm import Session, sessionmaker
 
 from core.audit import AuditWriter, InMemoryAuditStore
 from core.auth.errors import ConsentError
+from core.observability import install_observability
 from core.versioning import VersionRegistry
 from schemas.psg import (
     BaselineSummary,
@@ -37,23 +41,53 @@ from ..consent import StaticConsentProvider
 from ..profile import StaticProfileProvider
 from ..service import PatientStateEngine, ProfileNotFoundError
 from ..store import InMemoryPSGStore
+from ..wiring import build_sql_engine
 
 app = FastAPI(title="patient-copilot-state-engine", version="0.0.1")
+install_observability(app, service="state-engine")
 
-# Dev wiring (in-memory). Production swaps the store/audit/providers via DI.
+_versions = VersionRegistry.from_env().current()
+_persistence = os.environ.get("PERSISTENCE_BACKEND", "memory").lower()
+
+# In-memory dev wiring (default). Overridden per-request when PERSISTENCE_BACKEND=postgres.
 _consent_provider = StaticConsentProvider()
 _profile_provider = StaticProfileProvider()
-_engine = PatientStateEngine(
+_memory_engine = PatientStateEngine(
     store=InMemoryPSGStore(),
     consent_provider=_consent_provider,
     audit_writer=AuditWriter(InMemoryAuditStore()),
-    versions=VersionRegistry.from_env().current(),
+    versions=_versions,
     profile_provider=_profile_provider,
 )
 
+_session_factory: sessionmaker[Session] | None = None
 
-def get_engine() -> PatientStateEngine:
-    return _engine
+
+def _get_session_factory() -> sessionmaker[Session]:
+    global _session_factory
+    if _session_factory is None:
+        from core.db import make_session_factory
+
+        _session_factory = make_session_factory()
+    return _session_factory
+
+
+def get_engine() -> Iterator[PatientStateEngine]:
+    """Transaction-per-request when DB-backed: commit on success, roll back on any
+    error, always close. The in-memory path yields the shared dev engine unchanged.
+    """
+    if _persistence == "postgres":
+        session = _get_session_factory()()
+        try:
+            yield build_sql_engine(session, _versions)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    else:
+        yield _memory_engine
 
 
 _Engine = Annotated[PatientStateEngine, Depends(get_engine)]

@@ -1,6 +1,7 @@
 """Governance & compliance tables: patient profile, consent history, the
 hash-chained audit log, and the version registry (docs/04 §1, §7; docs/06 §8).
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -82,6 +83,26 @@ class AuditLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+
+class Outcome(Base):
+    """Outer-loop outcome capture (docs/11 §3). Append-only; the linked outputs +
+    version snapshot let a later human-gated retraining run join outcomes to the
+    exact artefacts that preceded them. Mirrors `schemas.outcome.Outcome`.
+    """
+
+    __tablename__ = "outcome"
+
+    outcome_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    patient_id: Mapped[UUID] = mapped_column(Uuid, nullable=False, index=True)
+    outcome_type: Mapped[str] = mapped_column(String, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    detail: Mapped[str] = mapped_column(String, nullable=False)
+    code: Mapped[str | None] = mapped_column(String)
+    linked_output_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    versions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class VersionRegistryRow(Base):

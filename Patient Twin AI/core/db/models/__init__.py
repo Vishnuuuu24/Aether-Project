@@ -22,7 +22,7 @@ import it here** or alembic won't see it.
 from __future__ import annotations
 
 from .common import NOW, VersionedMixin
-from .governance import AuditLog, Consent, PatientProfile, VersionRegistryRow
+from .governance import AuditLog, Consent, Outcome, PatientProfile, VersionRegistryRow
 from .outputs import OutputRecord
 from .psg import (
     AllergyNode,
@@ -44,6 +44,7 @@ __all__ = [
     "PatientProfile",
     "Consent",
     "AuditLog",
+    "Outcome",
     "VersionRegistryRow",
     # readings
     "ReadingNode",

@@ -19,6 +19,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from pydantic import ValidationError
 
+from core.observability import install_observability
 from schemas.document import ClinicalDocument, DocumentCodingResult, DocumentType
 
 from ..coder import DictionaryCoder
@@ -26,6 +27,7 @@ from ..ocr import PassthroughOcr
 from ..service import DocCodingService
 
 app = FastAPI(title="patient-copilot-doc-coding-service", version="0.0.1")
+install_observability(app, service="doc-coding")
 
 # Dev wiring: passthrough OCR + an EMPTY dictionary coder (emits no codes without a
 # clinical map) + UNSET thresholds (nothing auto-commits). Production swaps in the

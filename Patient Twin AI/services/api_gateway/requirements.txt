@@ -1,0 +1,9 @@
+fastapi==0.115.0
+python-multipart==0.0.32  # multipart document upload (docs/07 §3 /v1/ingest/documents)
+uvicorn[standard]==0.30.6
+asyncpg==0.29.0
+qdrant-client==1.10.1
+pydantic==2.9.2
+prometheus-client==0.25.0  # GET /metrics exposition (docs/07 §8)
+pyjwt==2.9.0  # gateway JWT verification (core.auth.jwt)
+httpx==0.28.1  # authenticating reverse-proxy forwarder to upstream services

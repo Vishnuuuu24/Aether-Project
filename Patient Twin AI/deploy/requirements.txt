@@ -1,0 +1,17 @@
+# Runtime deps for the app-service image (deploy/Dockerfile). One image serves every
+# non-gateway app service; the concrete service is chosen by the compose `command`.
+# Heavy/optional ML backends (docling, medcat, embedding models) are NOT here — they
+# load lazily and only in profiles that need them (docs/03).
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+sqlalchemy==2.0.34
+psycopg[binary]==3.2.4
+alembic==1.13.2
+prometheus-client==0.25.0
+python-multipart==0.0.32
+pyjwt==2.9.0
+qdrant-client==1.10.1
+httpx==0.28.1
+pyyaml==6.0.3
+asyncpg==0.29.0
