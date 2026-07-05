@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from pathlib import Path
 from uuid import uuid4
 
 from ai.baseline.eval import (
@@ -25,6 +26,7 @@ from ai.baseline.eval import (
     expected_calibration_error,
 )
 from ai.baseline.statistical import StatisticalBaselineEngine
+from ai.eval_datasets.wesad import load_wesad_labelled_deviations, wesad_available
 from ai.features.sqi import SqiGate
 from ai.forecasting.backtest import backtest
 from ai.forecasting.holt import HoltLinearForecaster
@@ -180,21 +182,28 @@ def _synthetic_deviation_labelled() -> list[LabelledDeviation]:
     return labelled
 
 
-def _synthetic_deviation_sections() -> tuple[MetricSection, MetricSection]:
-    labelled = _synthetic_deviation_labelled()
+def _deviation_sections(
+    dataset: str, labelled: list[LabelledDeviation]
+) -> tuple[MetricSection, MetricSection]:
+    """Detection + calibration sections over any labelled-deviation set (synthetic or
+    a real offline dataset — the metric layer is dataset-agnostic, docs/11 §1.2)."""
     det = detection_metrics(labelled)
     cal = expected_calibration_error(labelled)
     detection = MetricSection(
         name="deviation_detection",
-        dataset="synthetic",
+        dataset=dataset,
         metrics={"precision": det.precision, "recall": det.recall, "f1": det.f1, "n": float(det.n)},
     )
     calibration = MetricSection(
         name="deviation_calibration",
-        dataset="synthetic",
+        dataset=dataset,
         metrics={"ece": cal.ece, "n": float(cal.n)},
     )
     return detection, calibration
+
+
+def _synthetic_deviation_sections() -> tuple[MetricSection, MetricSection]:
+    return _deviation_sections("synthetic", _synthetic_deviation_labelled())
 
 
 def _safety_section() -> MetricSection:
@@ -214,61 +223,92 @@ def _safety_section() -> MetricSection:
     )
 
 
-def _gaps() -> list[EvalGap]:
-    return [
-        EvalGap(
-            metric="deviation_detection / calibration",
-            blocker=Blocker.DATASET,
-            detail=(
-                "Harness runs on synthetic input. Real numbers need offline-dataset "
-                "adapters (WESAD stress, MESA/SHHS sleep events, PPG-DaLiA activity, "
-                "WildPPG noise). WESAD is on disk but deriving HR from raw ECG/BVP is the "
-                "deferred FeatureExtractor's job (CLAUDE.md), and the layout is not yet "
-                "schema-validated (datasets/WESAD/README.md)."
+def _gaps(*, wesad_wired: bool) -> list[EvalGap]:
+    gaps: list[EvalGap] = []
+    if not wesad_wired:
+        gaps.append(
+            EvalGap(
+                metric="deviation_detection / calibration",
+                blocker=Blocker.DATASET,
+                detail=(
+                    "Ran on synthetic input: the WESAD dataset is not present in this "
+                    "environment. On a host with datasets/WESAD/ the classical "
+                    "WaveformFeatureExtractor (T8.1) derives HR from raw ECG and this "
+                    "section reports real WESAD stress-vs-baseline numbers (T8.2). Further "
+                    "datasets (MESA/SHHS sleep, PPG-DaLiA activity, WildPPG noise) remain "
+                    "to be adapted."
+                ),
+            )
+        )
+    gaps.extend(
+        [
+            EvalGap(
+                metric="forecast interval calibration",
+                blocker=Blocker.DATASET,
+                detail=(
+                    "MAE/RMSE vs naive is covered; empirical prediction-interval coverage "
+                    "needs interval-producing forecasts wired over a real longitudinal series."
+                ),
             ),
-        ),
-        EvalGap(
-            metric="forecast interval calibration",
-            blocker=Blocker.DATASET,
-            detail=(
-                "MAE/RMSE vs naive is covered; empirical prediction-interval coverage "
-                "needs interval-producing forecasts wired over a real longitudinal series."
+            EvalGap(
+                metric="llm_safety red_flag_recall (content patterns)",
+                blocker=Blocker.CLINICAL_CONFIG,
+                detail=(
+                    "Only the always-on structural HIGH-severity-event rule is exercised. "
+                    "Configured acute red-flag patterns are UNSET clinical config "
+                    "(config/clinical/policy_rules.yaml) — content-specific recall is gated "
+                    "on clinician-authored patterns."
+                ),
             ),
-        ),
-        EvalGap(
-            metric="llm_safety red_flag_recall (content patterns)",
-            blocker=Blocker.CLINICAL_CONFIG,
-            detail=(
-                "Only the always-on structural HIGH-severity-event rule is exercised. "
-                "Configured acute red-flag patterns are UNSET clinical config "
-                "(config/clinical/policy_rules.yaml) — content-specific recall is gated "
-                "on clinician-authored patterns."
+            EvalGap(
+                metric="llm_safety scope_violation_rate (lexicon)",
+                blocker=Blocker.CLINICAL_CONFIG,
+                detail=(
+                    "Enum-closed action vocabulary makes structural scope violations "
+                    "impossible, but the prohibited clinical lexicon is UNSET config; the "
+                    "gate is proven by test, not yet measured against a real term list."
+                ),
             ),
-        ),
-        EvalGap(
-            metric="llm_safety scope_violation_rate (lexicon)",
-            blocker=Blocker.CLINICAL_CONFIG,
-            detail=(
-                "Enum-closed action vocabulary makes structural scope violations "
-                "impossible, but the prohibited clinical lexicon is UNSET config; the "
-                "gate is proven by test, not yet measured against a real term list."
+            EvalGap(
+                metric="tooling latency (NFR-1) / throughput (NFR-2)",
+                blocker=Blocker.GPU_DEP,
+                detail=(
+                    "End-to-end latency and ingestion throughput are measured on the H200 "
+                    "slice only (CLAUDE.md: do not load-test on the Mac). Deferred to T5.3 "
+                    "on-server."
+                ),
             ),
-        ),
-        EvalGap(
-            metric="tooling latency (NFR-1) / throughput (NFR-2)",
-            blocker=Blocker.GPU_DEP,
-            detail=(
-                "End-to-end latency and ingestion throughput are measured on the H200 "
-                "slice only (CLAUDE.md: do not load-test on the Mac). Deferred to T5.3 "
-                "on-server."
-            ),
-        ),
-    ]
+        ]
+    )
+    return gaps
 
 
-def build_report(*, versions: VersionSet | None = None, now: datetime | None = None) -> EvalReport:
+# Auto-detected when a caller doesn't pass an explicit root (present on the Mac, absent in CI).
+DEFAULT_WESAD_ROOT = Path("datasets/WESAD")
+
+
+def build_report(
+    *,
+    versions: VersionSet | None = None,
+    now: datetime | None = None,
+    wesad_root: Path | None = DEFAULT_WESAD_ROOT,
+    wesad_max_subjects: int = 3,
+) -> EvalReport:
+    """Build the aggregated eval report.
+
+    When a WESAD dataset is present under `wesad_root`, the deviation sections carry
+    REAL stress-vs-baseline numbers (dataset="WESAD", via T8.1 HR + T8.2 adapter) and
+    the WESAD gap is dropped; otherwise they run on synthetic smoke and the gap is
+    logged. Pass `wesad_root=None` to force the synthetic path (deterministic tests).
+    """
     vs = versions or VersionRegistry.from_env().current()
-    detection, calibration = _synthetic_deviation_sections()
+    wesad_wired = wesad_root is not None and wesad_available(wesad_root)
+    if wesad_wired:
+        assert wesad_root is not None
+        labelled = load_wesad_labelled_deviations(wesad_root, max_subjects=wesad_max_subjects)
+        detection, calibration = _deviation_sections("WESAD", labelled)
+    else:
+        detection, calibration = _synthetic_deviation_sections()
     report = EvalReport(
         versions=vs.as_dict(),
         generated_at=(now or datetime.now(UTC)).isoformat(),
@@ -280,5 +320,5 @@ def build_report(*, versions: VersionSet | None = None, now: datetime | None = N
         calibration,
         _safety_section(),
     ]
-    report.gaps = _gaps()
+    report.gaps = _gaps(wesad_wired=wesad_wired)
     return report

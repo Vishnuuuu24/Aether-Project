@@ -1,0 +1,19 @@
+# Clinical knowledge-base content manifest (docs/02 retrieval; docs/06).
+#
+# The passages the RAG layer may ground on. This is the STRUCTURE only — the actual
+# guideline/textbook text is a curation deliverable and must never be fabricated
+# (CLAUDE.md: "Never invent clinical content ... do not fabricate guideline text").
+#
+# ⚠️  SET WITH CLINICAL / CURATION INPUT — intentionally UNSET (no passages). While
+#     empty, the KB is inert: retrieval finds no KB passages and the copilot grounds
+#     only on the patient's own record. Curated passages are ingested via a
+#     human-gated, versioned release (no closed-loop edits).
+#
+# Shape (validated by core.clinical_config; content set with clinical input):
+#   passages:
+#     - id: <stable_id>          # set with clinical input
+#       source: <source_name>    # e.g. epfl-llm/guidelines — set with clinical input
+#       text: <passage_text>     # set with clinical input — never fabricated
+#       codes: [<loinc|snomed|rxnorm>, ...]   # optional
+
+passages: []   # set with clinical / curation input

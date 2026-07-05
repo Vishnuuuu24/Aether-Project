@@ -11,6 +11,7 @@ No service redefines these; import from here (CLAUDE.md: contracts live in schem
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -18,11 +19,41 @@ from pydantic import BaseModel, Field, model_validator
 from schemas.reading import MeasurementContext, MetricCode, Reading
 
 
+class WaveformKind(str, Enum):
+    """The kind of raw physiological waveform a window carries (docs/05 §3).
+
+    Selects the classical DSP peak detector: R-peak detection for ECG, systolic-
+    peak detection for PPG. The value stream is raw signal *amplitude* — never a
+    clinical measurement — so it is deliberately kept off `Reading`.
+    """
+
+    ECG = "ecg"
+    PPG = "ppg"
+
+
+class RawWaveform(BaseModel):
+    """A raw, uniformly-sampled physiological signal (docs/05 §3).
+
+    This is the raw-waveform extension the deferred foundation-encoder path was
+    always specified to consume (see module docstring). In v1 the classical
+    `WaveformFeatureExtractor` derives HR/HRV from it. `samples` are raw signal
+    amplitudes in device units; the LLM never sees them — only the derived,
+    structured `FeatureSet` (CLAUDE.md principle 2).
+    """
+
+    kind: WaveformKind
+    sample_rate_hz: float = Field(gt=0.0)
+    samples: list[float] = Field(min_length=1)
+
+
 class SignalWindow(BaseModel):
     """A trailing window of readings for one `(patient, metric, context)`.
 
     The unit over which SQI gating and feature extraction operate (docs/05 §3-4).
     Every reading must share the window's patient_id / metric_code / context.
+    A window may instead (or additionally) carry a raw `waveform` — the input to
+    the classical DSP `WaveformFeatureExtractor` (T8.1); the reduced-`Reading` and
+    raw-`waveform` forms share this one contract so the call site never changes.
     """
 
     patient_id: UUID
@@ -31,6 +62,7 @@ class SignalWindow(BaseModel):
     window_start: datetime
     window_end: datetime
     readings: list[Reading] = Field(default_factory=list)
+    waveform: RawWaveform | None = None
 
     @model_validator(mode="after")
     def _window_is_consistent(self) -> SignalWindow:

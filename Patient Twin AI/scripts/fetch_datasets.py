@@ -120,7 +120,10 @@ def fetch_sleep_edf() -> None:
     dest.mkdir(parents=True, exist_ok=True)
     zip_path = dest / "sleep-edf-database-expanded-1.0.0.zip"
     if not zip_path.exists():
-        print(f"[sleep-edf] downloading {SLEEP_EDF_ZIP_URL} (8.1GB, this takes a while)", flush=True)
+        print(
+            f"[sleep-edf] downloading {SLEEP_EDF_ZIP_URL} (8.1GB, this takes a while)",
+            flush=True,
+        )
         subprocess.run(  # noqa: S603
             ["curl", "-L", "--fail", "-o", str(zip_path), SLEEP_EDF_ZIP_URL],
             check=True,
