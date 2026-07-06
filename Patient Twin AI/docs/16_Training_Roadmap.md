@@ -90,11 +90,23 @@ for any artifact promotion.
 
 ---
 
-## Sprint 9 — Training harness foundation (shared, backend-abstracted)
+## Sprint 9 — Training harness foundation (shared, backend-abstracted)  ✅ DONE
 
 *Source: CLAUDE.md "Put training behind `ai/training/` with two backends"; `03 §fine-tune`.*
 
 Build the skeleton once so every later sprint just fills in a model.
+
+**Built:** `ai/training/` with the `TrainBackend` seam (`mlx` | `cuda_qlora`, selected
+by `TRAIN_BACKEND`; MLX is a guarded import, `cuda_qlora` refuses without CUDA); a
+deterministic `TrainConfig` + `set_global_seed`; a content-addressed, versioned
+checkpoint writer that stamps a derived registry via `core.versioning.with_versions`
+(no global mutation — human-gated release model); an eval hook re-exporting the
+existing harness; and the shared `ai/eval_datasets/ppg_dalia.py` loader. The smoke
+job (`python -m ai.training.smoke`) trains a trivial linear head on real PPG-DaLiA
+BVP windows under MLX, emits a versioned checkpoint, and is scored (S1: HR MAE
+≈ 10.9 bpm — a 5-stat linear head with no calibration; the number only proves the
+loop runs, and is the trivial baseline Sprint 10's encoder must beat). `mlx>=0.18`
+added in `requirements-train.txt` (Apple-silicon only). 452 tests pass; ruff clean.
 
 - **DoD:** `ai/training/` exists with: a `TrainBackend` seam (`mlx` | `cuda_qlora`)
   selected by `TRAIN_BACKEND`; a shared `data/` layer that reuses `ai/eval_datasets`
@@ -218,4 +230,5 @@ it — abstaining from a learned model is a correct outcome, not a failure.
 
 ---
 
-*Awaiting your signal before implementing any of the above.*
+*Sprint 9 (foundation) is built. Awaiting your signal before starting Sprint 10
+(the biosignal encoder) or Sprint 11 (the reranker).*

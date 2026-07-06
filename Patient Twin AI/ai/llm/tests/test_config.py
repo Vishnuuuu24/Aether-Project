@@ -26,3 +26,15 @@ def test_external_profile_is_not_phi_allowed() -> None:
     cfg = GatewayConfig.from_env({"LLM_PROFILE": "external_deidentified"})
     assert cfg.profile.phi_allowed is False
     assert cfg.is_production_local() is False
+
+
+def test_gateway_api_key_used_for_self_hosted_auth() -> None:
+    cfg = GatewayConfig.from_env({"LLM_GATEWAY_API_KEY": "sk-lm-token"})
+    assert cfg.api_key == "sk-lm-token"
+
+
+def test_openrouter_key_takes_precedence_over_gateway_key() -> None:
+    cfg = GatewayConfig.from_env(
+        {"OPENROUTER_API_KEY": "or-key", "LLM_GATEWAY_API_KEY": "lm-key"}
+    )
+    assert cfg.api_key == "or-key"

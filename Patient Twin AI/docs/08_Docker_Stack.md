@@ -86,6 +86,35 @@ not in a container) must use `http://localhost:1234/v1` instead — `host.docker
 only resolves inside containers. Keep context modest; embeddings/reranker small or CPU.
 The `gpu` container profile in §4 does **not** apply on Mac.
 
+**Readiness probe.** Before a demo, confirm the quant is actually loaded rather than
+finding out via a cryptic inference error (CLAUDE.md ops note):
+```
+python -m ai.llm.readiness --base-url http://localhost:1234/v1
+```
+It lists `GET /v1/models` and checks the configured `PRIMARY_MODEL` is present; exits
+0 when ready, 1 otherwise. The check is OpenAI-compat, so it works unchanged against
+vLLM on the server. It is **read-only** — it never loads/unloads a model.
+
+**Optional auth.** If the self-hosted server requires a token (LM Studio 0.4.0 added
+permission tokens), set `LLM_GATEWAY_API_KEY=<token>`; the gateway and the probe send
+it as `Authorization: Bearer`. Not needed for the default localhost dev setup.
+
+**On LM Studio's native v1 API (`/api/v1/*`).** LM Studio 0.4.0 ships stateful chat,
+MCP-via-API, and remote-MCP features on its native endpoints. We deliberately **do
+not** use them, and the gateway stays on the OpenAI-compatible `/v1/chat/completions`
+path:
+- **MCP / tools via the inference API** would let the model call tools and reach
+  external servers during generation — contra principle 1 (the LLM proposes, never
+  acts), principle 4 (the Policy Engine is the last gate), and the default-deny,
+  no-PHI-egress rule (docs/06 §6). Tool/action orchestration is the deterministic
+  layer's job, never the model's.
+- **Stateful chat** would hold conversation state inside LM Studio; the **PSG is the
+  single source of truth** and every output must be stamped + audited (docs/04 §7).
+- The native `/api/v1/chat` also drops custom tools and assistant-message inclusion
+  vs. the OpenAI-compat path, so it is a poorer fit for our single structured
+  `ProposedOutput` call anyway. Keeping `/v1/*` also preserves one code path across
+  LM Studio (Mac) and vLLM (server).
+
 ## 3. docker-compose.yml (core)
 
 ```yaml

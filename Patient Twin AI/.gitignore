@@ -29,6 +29,9 @@ models/cache/
 .cache/
 huggingface/
 
+# --- Training checkpoints / artifacts (docs/16; versioned on disk, not in git) ---
+checkpoints/
+
 # --- Docker volume data (if ever bind-mounted locally) ---
 pgdata/
 qdrant_storage/

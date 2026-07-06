@@ -1,0 +1,11 @@
+# On-device training backend (docs/16). NOT needed for the base test suite — the
+# training tests skip-guard when MLX is absent, like the DB/Qdrant/ML-adapter tests.
+# Install this to run the Mac (mlx) training loop and the Sprint 9 smoke job.
+#
+# Apple-silicon ONLY: `mlx` is Metal-backed and does not install on Linux/CUDA. The
+# server (H200) training path uses the `cuda_qlora` backend with its own CUDA-only
+# stack (bitsandbytes/PEFT), deferred per CLAUDE.md — do not add those here.
+#
+# `mlx-lm` is intentionally absent: the 35B LLM is NOT fine-tuned on the Mac (docs/16);
+# add it only when the local-LLM adapter work needs it.
+mlx>=0.18

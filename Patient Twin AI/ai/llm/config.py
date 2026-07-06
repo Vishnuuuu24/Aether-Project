@@ -13,6 +13,8 @@ Env (see .env.example):
     LLM_GATEWAY_BASE_URL=http://host.docker.internal:1234/v1
     PRIMARY_MODEL=<served model id>   (LLM_MODEL overrides it if set)
     OPENROUTER_API_KEY=<only for external_deidentified>
+    LLM_GATEWAY_API_KEY=<optional bearer for a self-hosted server that requires auth,
+                         e.g. an LM Studio 0.4.0 permission token>
 """
 
 from __future__ import annotations
@@ -47,7 +49,10 @@ class GatewayConfig:
     def from_env(cls, env: Mapping[str, str] | None = None) -> GatewayConfig:
         env = env if env is not None else os.environ
         profile = LLMProfile(env.get("LLM_PROFILE", "local"))
-        api_key = env.get("OPENROUTER_API_KEY") or None
+        # External egress uses OPENROUTER_API_KEY; a self-hosted server that turns on
+        # auth (e.g. an LM Studio permission token) uses LLM_GATEWAY_API_KEY. Both are
+        # sent as `Authorization: Bearer`; OpenRouter wins if somehow both are set.
+        api_key = env.get("OPENROUTER_API_KEY") or env.get("LLM_GATEWAY_API_KEY") or None
         # One model identity: the version stamp (PRIMARY_MODEL) and the served API id
         # are the same thing. LLM_MODEL is an explicit override if they ever diverge.
         model = env.get("LLM_MODEL")
