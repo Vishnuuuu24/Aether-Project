@@ -56,6 +56,34 @@ class HrWindows:
         return int(self.features.shape[0])
 
 
+@dataclass(frozen=True)
+class SignalWindows:
+    """Raw supervised HR set for the biosignal encoder (docs/16 Sprint 10).
+
+    Unlike `HrWindows` (5 reduced stats), this keeps the RAW BVP window `signals`
+    [N, L] so a convolutional encoder can learn HR from the waveform morphology.
+    `subject_ids` is per-window provenance (length N) — the encoder trainer splits
+    on it to guarantee no subject leaks across train/val (docs/16 Sprint 10 Don't).
+    """
+
+    signals: FloatArray  # [N, L] raw BVP amplitude windows
+    targets: FloatArray  # [N] ground-truth HR (bpm)
+    subject_ids: tuple[str, ...]  # per-window subject stem, length N
+    sample_rate_hz: float
+    window_samples: int
+
+    def __len__(self) -> int:
+        return int(self.signals.shape[0])
+
+    @property
+    def subjects(self) -> tuple[str, ...]:
+        """Distinct contributing subjects, in first-seen order (provenance)."""
+        seen: dict[str, None] = {}
+        for sid in self.subject_ids:
+            seen.setdefault(sid, None)
+        return tuple(seen)
+
+
 def ppg_dalia_available(root: Path) -> bool:
     """True when at least one `S*.pkl` subject file is present under `root`."""
     return bool(_subject_files(root))
@@ -164,4 +192,71 @@ def load_ppg_dalia_hr_windows(
         targets=np.concatenate(all_targets, axis=0),
         feature_names=FEATURE_NAMES,
         subjects=tuple(used),
+    )
+
+
+def _window_signals(bvp: FloatArray, labels: FloatArray) -> tuple[FloatArray, FloatArray]:
+    """Cut BVP into the labels' own 8 s / 2 s-step windows; keep the RAW segment."""
+    win = int(_HR_WINDOW_SECONDS * _BVP_FS_HZ)
+    step = int(_HR_STEP_SECONDS * _BVP_FS_HZ)
+    segs: list[FloatArray] = []
+    targets: list[float] = []
+    for i in range(labels.size):
+        start = i * step
+        end = start + win
+        if end > bvp.size:
+            break
+        segs.append(bvp[start:end])
+        targets.append(float(labels[i]))
+    if not segs:
+        return np.empty((0, win), dtype=np.float64), np.empty(0, dtype=np.float64)
+    return np.asarray(segs, dtype=np.float64), np.asarray(targets, dtype=np.float64)
+
+
+def load_ppg_dalia_hr_signal_windows(
+    root: Path,
+    *,
+    subjects: Sequence[str] | None = None,
+    max_subjects: int | None = None,
+    max_windows_per_subject: int | None = None,
+) -> SignalWindows:
+    """Parse PPG-DaLiA subjects into a RAW-BVP-window → GT-HR set (Sprint 10 encoder).
+
+    Same window geometry and validation as `load_ppg_dalia_hr_windows`, but retains
+    the raw 8 s BVP segment (not reduced stats) and tags each window with its subject
+    stem so the trainer can hold whole subjects out. Raises `PpgDaliaLayoutError` on
+    an invalid layout.
+    """
+    files = _subject_files(root)
+    if subjects is not None:
+        wanted = set(subjects)
+        files = [p for p in files if p.stem in wanted]
+    if max_subjects is not None:
+        files = files[:max_subjects]
+    if not files:
+        raise PpgDaliaLayoutError(f"no PPG-DaLiA subject pickles found under {root}")
+
+    win = int(_HR_WINDOW_SECONDS * _BVP_FS_HZ)
+    all_signals: list[FloatArray] = []
+    all_targets: list[FloatArray] = []
+    subject_ids: list[str] = []
+    for pkl_path in files:
+        bvp, labels = _load_subject(pkl_path)
+        segs, targets = _window_signals(bvp, labels)
+        if max_windows_per_subject is not None:
+            segs, targets = segs[:max_windows_per_subject], targets[:max_windows_per_subject]
+        if len(targets) == 0:
+            continue
+        all_signals.append(segs)
+        all_targets.append(targets)
+        subject_ids.extend([pkl_path.stem] * len(targets))
+
+    if not all_signals:
+        raise PpgDaliaLayoutError(f"no usable HR signal windows extracted from {root}")
+    return SignalWindows(
+        signals=np.concatenate(all_signals, axis=0),
+        targets=np.concatenate(all_targets, axis=0),
+        subject_ids=tuple(subject_ids),
+        sample_rate_hz=_BVP_FS_HZ,
+        window_samples=win,
     )

@@ -26,6 +26,7 @@ from ai.baseline.eval import (
     expected_calibration_error,
 )
 from ai.baseline.statistical import StatisticalBaselineEngine
+from ai.eval_datasets.ppg_dalia import ppg_dalia_available
 from ai.eval_datasets.wesad import load_wesad_labelled_deviations, wesad_available
 from ai.features.sqi import SqiGate
 from ai.forecasting.backtest import backtest
@@ -223,8 +224,47 @@ def _safety_section() -> MetricSection:
     )
 
 
-def _gaps(*, wesad_wired: bool) -> list[EvalGap]:
+def _ppg_dalia_hr_section(
+    root: Path,
+    *,
+    encoder_checkpoint: Path | None,
+    max_windows_per_subject: int,
+) -> MetricSection:
+    """Real PPG-DaLiA HR numbers: the classical DSP pipeline always; the learned
+    encoder too when a checkpoint is configured (docs/16 Sprint 10)."""
+    from ai.training.ppg_hr_eval import evaluate_holdout
+
+    weights = None
+    if encoder_checkpoint is not None:
+        from ai.training.checkpoints import load_encoder_weights
+
+        weights = load_encoder_weights(encoder_checkpoint)
+    h = evaluate_holdout(root, weights=weights, max_windows_per_subject=max_windows_per_subject)
+    metrics = {
+        "classical_hr_mae": h.classical["mae"],
+        "classical_coverage": h.classical["coverage"],
+        "n": float(h.n_val),
+    }
+    if h.encoder is not None:
+        metrics["encoder_hr_mae"] = h.encoder["mae"]
+    return MetricSection(name="ppg_hr", dataset="PPG-DaLiA", metrics=metrics)
+
+
+def _gaps(*, wesad_wired: bool, ppg_wired: bool) -> list[EvalGap]:
     gaps: list[EvalGap] = []
+    if not ppg_wired:
+        gaps.append(
+            EvalGap(
+                metric="ppg_hr (PPG-DaLiA)",
+                blocker=Blocker.DATASET,
+                detail=(
+                    "Ran without a PPG-DaLiA HR section: the dataset is not present. On a "
+                    "host with datasets/PPG-DaLiA/ this section reports classical-DSP HR MAE "
+                    "(and the learned encoder's, when a checkpoint is configured) on "
+                    "subject-held-out windows (docs/16 Sprint 10; see docs/17 for the run log)."
+                ),
+            )
+        )
     if not wesad_wired:
         gaps.append(
             EvalGap(
@@ -285,6 +325,7 @@ def _gaps(*, wesad_wired: bool) -> list[EvalGap]:
 
 # Auto-detected when a caller doesn't pass an explicit root (present on the Mac, absent in CI).
 DEFAULT_WESAD_ROOT = Path("datasets/WESAD")
+DEFAULT_PPG_DALIA_ROOT = Path("datasets/PPG-DaLiA")
 
 
 def build_report(
@@ -293,13 +334,18 @@ def build_report(
     now: datetime | None = None,
     wesad_root: Path | None = DEFAULT_WESAD_ROOT,
     wesad_max_subjects: int = 3,
+    ppg_root: Path | None = DEFAULT_PPG_DALIA_ROOT,
+    ppg_encoder_checkpoint: Path | None = None,
+    ppg_max_windows_per_subject: int = 300,
 ) -> EvalReport:
     """Build the aggregated eval report.
 
     When a WESAD dataset is present under `wesad_root`, the deviation sections carry
     REAL stress-vs-baseline numbers (dataset="WESAD", via T8.1 HR + T8.2 adapter) and
     the WESAD gap is dropped; otherwise they run on synthetic smoke and the gap is
-    logged. Pass `wesad_root=None` to force the synthetic path (deterministic tests).
+    logged. Likewise a present `ppg_root` adds a real `ppg_hr` (PPG-DaLiA) section
+    (classical DSP HR, plus the encoder when `ppg_encoder_checkpoint` is given). Pass
+    `wesad_root=None` / `ppg_root=None` to force the synthetic path (deterministic tests).
     """
     vs = versions or VersionRegistry.from_env().current()
     wesad_wired = wesad_root is not None and wesad_available(wesad_root)
@@ -320,5 +366,15 @@ def build_report(
         calibration,
         _safety_section(),
     ]
-    report.gaps = _gaps(wesad_wired=wesad_wired)
+    ppg_wired = ppg_root is not None and ppg_dalia_available(ppg_root)
+    if ppg_wired:
+        assert ppg_root is not None
+        report.sections.append(
+            _ppg_dalia_hr_section(
+                ppg_root,
+                encoder_checkpoint=ppg_encoder_checkpoint,
+                max_windows_per_subject=ppg_max_windows_per_subject,
+            )
+        )
+    report.gaps = _gaps(wesad_wired=wesad_wired, ppg_wired=ppg_wired)
     return report

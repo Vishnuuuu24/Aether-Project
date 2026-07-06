@@ -31,6 +31,7 @@ huggingface/
 
 # --- Training checkpoints / artifacts (docs/16; versioned on disk, not in git) ---
 checkpoints/
+reports/
 
 # --- Docker volume data (if ever bind-mounted locally) ---
 pgdata/

@@ -25,6 +25,7 @@ import numpy as np
 
 from ai.training.backends import TrainedHead
 from ai.training.config import TrainConfig
+from ai.training.encoder_model import EncoderWeights
 from core.versioning import VersionRegistry
 
 DEFAULT_CHECKPOINT_ROOT = Path("checkpoints")
@@ -37,15 +38,15 @@ class CheckpointHandle:
     manifest: dict[str, object]
 
 
+def _hash_identity(identity: dict[str, object]) -> str:
+    blob = json.dumps(identity, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:12]
+
+
 def _version_id(name: str, config: TrainConfig, provenance: dict[str, object]) -> str:
     """Deterministic content-addressed id: hash of run identity (no timestamp)."""
-    identity = {
-        "name": name,
-        "config": asdict(config),
-        "provenance": provenance,
-    }
-    blob = json.dumps(identity, sort_keys=True, default=str).encode("utf-8")
-    return f"{name}@{hashlib.sha256(blob).hexdigest()[:12]}"
+    identity = {"name": name, "config": asdict(config), "provenance": provenance}
+    return f"{name}@{_hash_identity(identity)}"
 
 
 def write_checkpoint(
@@ -103,6 +104,71 @@ def load_head(handle_or_path: CheckpointHandle | Path) -> TrainedHead:
         feature_std=npz["feature_std"].astype(np.float64),
         feature_names=tuple(str(n) for n in npz["feature_names"].tolist()),
         backend=str(manifest["backend"]),
+    )
+
+
+def write_encoder_checkpoint(
+    weights: EncoderWeights,
+    *,
+    name: str,
+    config: object,
+    provenance: dict[str, object],
+    metrics: dict[str, float] | None = None,
+    root: Path = DEFAULT_CHECKPOINT_ROOT,
+    now: datetime | None = None,
+) -> CheckpointHandle:
+    """Write a conv-encoder checkpoint (`encoder.npz` + `manifest.json`).
+
+    Same content-addressed identity scheme as `write_checkpoint`, but serialises the
+    multi-array `EncoderWeights` (variable conv depth) rather than a single linear
+    head. `config` is any dataclass of hyperparameters (hashed into the version).
+    """
+    identity = {"name": name, "config": asdict(config), "provenance": provenance}  # type: ignore[call-overload]
+    version = f"{name}@{_hash_identity(identity)}"
+    out_dir = root / version
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays: dict[str, np.ndarray] = {"n_conv": np.array([len(weights.conv_w)])}
+    for i, (w, b) in enumerate(zip(weights.conv_w, weights.conv_b, strict=True)):
+        arrays[f"conv{i}_w"] = w
+        arrays[f"conv{i}_b"] = b
+    arrays["head_w"] = weights.head_w
+    arrays["head_b"] = np.array([weights.head_b])
+    arrays["hr_mean"] = np.array([weights.hr_mean])
+    arrays["hr_std"] = np.array([weights.hr_std])
+    arrays["sample_rate_hz"] = np.array([weights.sample_rate_hz])
+    arrays["window_samples"] = np.array([weights.window_samples])
+    np.savez(out_dir / "encoder.npz", **arrays)
+
+    manifest: dict[str, object] = {
+        "name": name,
+        "version": version,
+        "kind": "conv_hr_encoder",
+        "created_at": (now or datetime.now(UTC)).isoformat(),
+        "config": asdict(config),  # type: ignore[call-overload]
+        "provenance": provenance,
+        "metrics": metrics or {},
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+    return CheckpointHandle(path=out_dir, version=version, manifest=manifest)
+
+
+def load_encoder_weights(handle_or_path: CheckpointHandle | Path) -> EncoderWeights:
+    """Reload `EncoderWeights` from a checkpoint dir — NumPy only, no MLX needed."""
+    path = handle_or_path.path if isinstance(handle_or_path, CheckpointHandle) else handle_or_path
+    npz = np.load(path / "encoder.npz", allow_pickle=False)
+    n_conv = int(npz["n_conv"][0])
+    conv_w = tuple(npz[f"conv{i}_w"].astype(np.float64) for i in range(n_conv))
+    conv_b = tuple(npz[f"conv{i}_b"].astype(np.float64) for i in range(n_conv))
+    return EncoderWeights(
+        conv_w=conv_w,
+        conv_b=conv_b,
+        head_w=npz["head_w"].astype(np.float64),
+        head_b=float(npz["head_b"][0]),
+        hr_mean=float(npz["hr_mean"][0]),
+        hr_std=float(npz["hr_std"][0]),
+        sample_rate_hz=float(npz["sample_rate_hz"][0]),
+        window_samples=int(npz["window_samples"][0]),
     )
 
 

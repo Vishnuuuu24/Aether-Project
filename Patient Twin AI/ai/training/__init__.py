@@ -20,23 +20,32 @@ from ai.training.backends import (
 )
 from ai.training.checkpoints import (
     CheckpointHandle,
+    load_encoder_weights,
     load_head,
     register_checkpoint_version,
     write_checkpoint,
+    write_encoder_checkpoint,
 )
 from ai.training.config import TrainConfig, set_global_seed
+from ai.training.encoder_model import EncoderWeights, predict_hr
+from ai.training.splits import subject_held_out_split
 
 __all__ = [
     "CheckpointHandle",
     "CudaQloraBackend",
+    "EncoderWeights",
     "MlxBackend",
     "TrainBackend",
     "TrainBackendUnavailable",
     "TrainConfig",
     "TrainedHead",
+    "load_encoder_weights",
     "load_head",
+    "predict_hr",
     "register_checkpoint_version",
     "select_backend",
     "set_global_seed",
+    "subject_held_out_split",
     "write_checkpoint",
+    "write_encoder_checkpoint",
 ]
