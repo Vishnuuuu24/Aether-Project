@@ -21,6 +21,7 @@ delegate (CLAUDE.md principle 2). Outputs are stamped with this engine's version
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from ai.baseline.config import BaselineConfig
@@ -28,10 +29,22 @@ from ai.baseline.statistical import StatisticalBaselineEngine
 from ai.features.foundation_encoder import FoundationEncoderFeatureExtractor
 from ai.features.sqi import SqiGate
 from schemas.baseline import Baseline, DeviationResult
-from schemas.features import SignalWindow
+from schemas.features import FeatureSet, SignalWindow
 from schemas.reading import MetricCode, Reading
 
 FOUNDATION_ENCODER_BASELINE_VERSION = "foundation-encoder-baseline-v1"
+PAPAGEI_BASELINE_VERSION = "papagei-s-baseline-v1"
+
+
+@runtime_checkable
+class _WindowExtractor(Protocol):
+    """Structural type for any learned `FeatureExtractor` this engine can ingest windows
+    through — both `FoundationEncoderFeatureExtractor` and `PapageiFeatureExtractor` fit
+    (they share `extract()` + a `version` stamp)."""
+
+    version: str
+
+    def extract(self, window: SignalWindow) -> FeatureSet: ...
 
 
 class FoundationEncoderBaselineEngine:
@@ -46,7 +59,7 @@ class FoundationEncoderBaselineEngine:
     def __init__(
         self,
         *,
-        extractor: FoundationEncoderFeatureExtractor,
+        extractor: _WindowExtractor,
         delegate: StatisticalBaselineEngine,
         version: str = FOUNDATION_ENCODER_BASELINE_VERSION,
     ) -> None:
@@ -71,6 +84,38 @@ class FoundationEncoderBaselineEngine:
         The delegate carries THIS engine's version so outputs are stamped honestly.
         """
         extractor = FoundationEncoderFeatureExtractor.from_checkpoint(path)
+        delegate = StatisticalBaselineEngine(
+            gate=gate,
+            config=config,
+            patient_id=patient_id,
+            age_years=age_years,
+            sex=sex,
+            version=version,
+        )
+        return cls(extractor=extractor, delegate=delegate, version=version)
+
+    @classmethod
+    def from_papagei_checkpoint(
+        cls,
+        path: Path,
+        *,
+        gate: SqiGate,
+        config: BaselineConfig | None = None,
+        patient_id: UUID | None = None,
+        age_years: int | None = None,
+        sex: str | None = None,
+        stress_head_path: Path | None = None,
+        version: str = PAPAGEI_BASELINE_VERSION,
+    ) -> FoundationEncoderBaselineEngine:
+        """Same engine, but ingest windows through the fine-tuned PaPaGei-S extractor
+        instead of the from-scratch encoder. The deviation math (delegate) is IDENTICAL —
+        only the HR-from-window step differs. A missing checkpoint falls back to classical
+        inside the extractor (never raises)."""
+        from ai.features.papagei_extractor import PapageiFeatureExtractor
+
+        extractor = PapageiFeatureExtractor.from_checkpoint(
+            path, stress_head_path=stress_head_path
+        )
         delegate = StatisticalBaselineEngine(
             gate=gate,
             config=config,

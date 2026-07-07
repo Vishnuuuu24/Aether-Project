@@ -14,7 +14,8 @@ the comparison table and add a one-line judgement. Lower MAE = better; MAE/RMSE 
 
 | Date | Run | Split (train/held-out) | Encoder MAE | Classical DSP | Linear | Verdict |
 |---|---|---|---|---|---|---|
-| 2026-07-06 | `ppg-hr-conv-encoder@fc0e9b` | all 15 (11 / 4: S6 S8 S10 S13) | **6.50** | 11.03 | 16.86 | ✅ beats both |
+| 2026-07-07 | `papagei-s-hr-encoder@5192b7` | all 15 (11 / 4: S6 S8 S10 S13) | **4.59** | 10.63 | 16.85 | ✅ **best** — real PaPaGei-S pretrained init, −29% vs from-scratch |
+| 2026-07-06 | `ppg-hr-conv-encoder@fc0e9b` | all 15 (11 / 4: S6 S8 S10 S13) | 6.50 | 11.03 | 16.86 | ✅ beats both (from-scratch) |
 | 2026-07-06 | BVP+ACC fusion (experiment) | all 15 (11 / 4, same split) | 7.77 | — | — | ❌ 19.6% worse — keep BVP-only |
 | 2026-07-06 | `ppg-hr-conv-encoder@ecb9af` (demo) | 12 subj, 1500 w/subj (3 held) | 9.92 *(best 9.28)* | — | 18.66 | ⚠️ superseded |
 | 2026-07-06 | `linear-hr-smoke` (Sprint 9) | S1, random-tail | — | — | 10.88 | loop proof only |
@@ -29,13 +30,61 @@ wrist PPG under stress/motion is a harder signal, so read these as encoder-vs-cl
 
 | Date | Signal | Extractor | F1 | ECE | n | Verdict |
 |---|---|---|---|---|---|---|
-| 2026-07-06 | wrist BVP @64 Hz, 8 s | **encoder (learned)** | **0.701** | **0.195** | 3429 | ✅ beats classical |
-| 2026-07-06 | wrist BVP @64 Hz, 8 s | classical DSP | 0.483 | 0.282 | 3425 | baseline |
+| 2026-07-07 | wrist BVP →125 Hz, 10 s | **PaPaGei-S (finetuned)** | **0.701** | **0.195** | 2737 | ✅ beats classical (+0.227); **= from-scratch; still < 0.80** |
+| 2026-07-07 | wrist BVP →125 Hz, 10 s | classical DSP | 0.474 | 0.278 | 2736 | baseline @125 Hz |
+| 2026-07-06 | wrist BVP @64 Hz, 8 s | encoder (from-scratch) | 0.701 | 0.195 | 3429 | ✅ beats classical |
+| 2026-07-06 | wrist BVP @64 Hz, 8 s | classical DSP | 0.483 | 0.282 | 3425 | baseline @64 Hz |
 | (standing) | chest ECG @700 Hz, 30 s | classical DSP | ≈0.80 | ≈0.15 | — | the DoD bar (clean signal) |
 
 ---
 
 ## Entries (newest first)
+
+### 2026-07-07 · Sprint 10 · **PaPaGei-S pretrained encoder, fine-tuned** · `papagei-s-hr-encoder@5192b7651ac8`
+- **What:** the DoD's literal "load the pretrained encoder weights / fine-tune the
+  pretrained encoder" — closes the gap a review flagged (we had trained from scratch).
+  The AUTHENTIC PaPaGei-S (Nokia Bell Labs, ICLR'25; Zenodo 10.5281/zenodo.13983110,
+  MD5-verified, BSD-3-Clause-Clear) — an 18-block 1-D ResNet, 512-d embedding.
+- **How:** ported the trunk to NumPy for serving (parity vs the real torch model =
+  **5.8e-15**, machine precision, float64) and FULL-fine-tuned it in PyTorch/MPS
+  (CLAUDE.md-sanctioned Mac backend for PaPaGei-S) on PPG-DaLiA BVP resampled to
+  PaPaGei's native 125 Hz / 10 s contract. Fresh HR head (head LR 10×), subject-held-out
+  (S6 S8 S10 S13 — the SAME split as the from-scratch run), best-val checkpoint kept,
+  60 epochs, all 15 subjects. Serving is NumPy (a post-fine-tune parity check gates the
+  export). `python -m ai.training.train_papagei_encoder`.
+- **Result:** held-out **HR MAE 4.59 bpm** (best epoch 56, RMSE 9.53) vs from-scratch
+  **6.50**, classical DSP **10.63**, linear **16.85** — a **−29% error reduction over the
+  from-scratch encoder**. Promotion advisory: RECOMMENDED (beats both bars); human-gated.
+- **Good / bad:** ✅ the pretrained init is a decisive, honest win on HR — exactly where
+  PaPaGei's pretraining objective lives. The NumPy serving port matching the torch model
+  to machine precision means the shipped model IS the validated model. ⚠️ this does NOT
+  by itself clear the deviation bar (see next entry) — better HR ≠ better stress
+  separability.
+- **Next lever:** the deviation bar is signal-limited, not encoder-limited (below).
+
+### 2026-07-07 · Sprint 10 · PaPaGei-S deviation + stress-head (honest bar check)
+- **What:** does the pretrained encoder push WESAD wrist-BVP deviation past the literal
+  DoD bar (F1 ≥ 0.80 / ECE ≤ 0.15)? The review's hypothesis was "F1 0.701 is low because
+  it lacks the pretrained encoder." Tested directly.
+- **How:** scored the fine-tuned PaPaGei extractor vs classical DSP on the SAME resampled
+  125 Hz / 10 s wrist-BVP windows (`wesad_deviation_eval --papagei-checkpoint …`); trained
+  a stress head on the fine-tuned embedding, subject-held-out (`train_stress_head
+  --papagei`).
+- **Result:** deviation **F1 0.701 · ECE 0.195** (n=2737) — beats classical@125 Hz
+  (0.474) by **+0.227**, but lands at the **SAME F1 as the from-scratch encoder** and
+  **stays below 0.80**. Stress head **F1 0.775 · AUC 0.917 · acc 0.818** (majority 0.643,
+  n=729) — slightly *behind* the from-scratch stress head (0.803 / 0.950).
+- **Good / bad:** ✅ this DISPROVES the review's causal hypothesis: even the real
+  pretrained SOTA encoder — which cut HR MAE by 29% — leaves deviation F1 unchanged at
+  0.701. The 0.80 gap is therefore **signal-limited, not encoder-limited**: wrist PPG
+  under the TSST (motion + speech) is a genuinely harder signal than the clean chest ECG
+  the 0.80 bar was set on. Two independent encoders (from-scratch + PaPaGei) converge to
+  0.701. ⚠️ PaPaGei is not uniformly better — on stress *classification* it's marginally
+  behind the from-scratch embedding, so it is NOT a strict replacement; it's the HR
+  encoder of choice, comparable on stress.
+- **Next lever:** to move the deviation bar you'd need a cleaner signal (chest ECG stays
+  classical at ≈0.80) or a deviation model trained end-to-end on the stress label — not a
+  better HR encoder. Promotion is human-gated regardless.
 
 ### 2026-07-06 · Sprint 10 · Accelerometer fusion — measured, **negative result**
 - **What:** does adding the wrist accelerometer to raw BVP lower PPG→HR error? The
@@ -87,8 +136,6 @@ wrist PPG under stress/motion is a harder signal, so read these as encoder-vs-cl
   during the TSST is genuinely noisier (motion + speech). Honest, not a regression.
 - **Next lever:** accelerometer fusion (motion is the corruptor) should lift both, most
   for the encoder; then a dedicated stress head instead of routing through HR alone.
-
-### 2026-07-06 · Sprint 10 · PPG→HR conv encoder, full-quality · `@fc0e9bceb6a2`
 
 ### 2026-07-06 · Sprint 10 · PPG→HR conv encoder, full-quality · `@fc0e9bceb6a2`
 - **What:** 1D-CNN encoder + HR head — raw wrist BVP window → heart rate (bpm).

@@ -312,6 +312,83 @@ def load_ppg_dalia_hr_fused_windows(
     )
 
 
+def _window_papagei(
+    bvp_125: FloatArray, labels: FloatArray, *, target_fs: float, segment_seconds: float
+) -> tuple[FloatArray, FloatArray]:
+    """Cut resampled (125 Hz) BVP into `segment_seconds` windows CENTRED on each GT-HR
+    label's own 8 s window, so PaPaGei sees its native-length segment centred on the
+    region the label describes. `bvp_125` is already resampled to `target_fs`."""
+    seg = int(segment_seconds * target_fs)
+    segs: list[FloatArray] = []
+    targets: list[float] = []
+    for i in range(labels.size):
+        # label i summarises original [i*2s, i*2s+8s]; centre a seg-long window on it.
+        centre_s = i * _HR_STEP_SECONDS + _HR_WINDOW_SECONDS / 2.0
+        start = int(round((centre_s - segment_seconds / 2.0) * target_fs))
+        end = start + seg
+        if start < 0 or end > bvp_125.size:
+            continue
+        segs.append(bvp_125[start:end])
+        targets.append(float(labels[i]))
+    if not segs:
+        return np.empty((0, seg), dtype=np.float64), np.empty(0, dtype=np.float64)
+    return np.asarray(segs, dtype=np.float64), np.asarray(targets, dtype=np.float64)
+
+
+def load_ppg_dalia_hr_papagei_windows(
+    root: Path,
+    *,
+    subjects: Sequence[str] | None = None,
+    max_subjects: int | None = None,
+    max_windows_per_subject: int | None = None,
+    target_fs_hz: float = 125.0,
+    segment_seconds: float = 10.0,
+) -> SignalWindows:
+    """PPG-DaLiA raw-BVP windows resampled to PaPaGei-S's pretrained input contract
+    (default 125 Hz / 10 s = 1250 samples), each carrying the GT HR of the 8 s label it
+    is centred on (docs/16 Sprint 10 pretrained-encoder init). Subject provenance kept
+    for held-out splitting. Separate from `load_ppg_dalia_hr_signal_windows` (64 Hz /
+    8 s, the from-scratch encoder's geometry) so both paths stay reproducible."""
+    from ai.eval_datasets._resample import resample_poly_to
+
+    files = _subject_files(root)
+    if subjects is not None:
+        wanted = set(subjects)
+        files = [p for p in files if p.stem in wanted]
+    if max_subjects is not None:
+        files = files[:max_subjects]
+    if not files:
+        raise PpgDaliaLayoutError(f"no PPG-DaLiA subject pickles found under {root}")
+
+    seg = int(segment_seconds * target_fs_hz)
+    all_signals: list[FloatArray] = []
+    all_targets: list[FloatArray] = []
+    subject_ids: list[str] = []
+    for pkl_path in files:
+        bvp, labels = _load_subject(pkl_path)
+        bvp_125 = resample_poly_to(bvp, _BVP_FS_HZ, target_fs_hz)
+        segs, targets = _window_papagei(
+            bvp_125, labels, target_fs=target_fs_hz, segment_seconds=segment_seconds
+        )
+        if max_windows_per_subject is not None:
+            segs, targets = segs[:max_windows_per_subject], targets[:max_windows_per_subject]
+        if len(targets) == 0:
+            continue
+        all_signals.append(segs)
+        all_targets.append(targets)
+        subject_ids.extend([pkl_path.stem] * len(targets))
+
+    if not all_signals:
+        raise PpgDaliaLayoutError(f"no usable PaPaGei HR windows extracted from {root}")
+    return SignalWindows(
+        signals=np.concatenate(all_signals, axis=0),
+        targets=np.concatenate(all_targets, axis=0),
+        subject_ids=tuple(subject_ids),
+        sample_rate_hz=target_fs_hz,
+        window_samples=seg,
+    )
+
+
 def load_ppg_dalia_hr_signal_windows(
     root: Path,
     *,

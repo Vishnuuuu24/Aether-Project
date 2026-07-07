@@ -1,0 +1,17 @@
+# PaPaGei-S port + fine-tune tooling (docs/16 Sprint 10 — pretrained-encoder init).
+#
+# `torch` is used for TWO things here, both on the training/port side only:
+#   1. Loading the authentic PaPaGei-S checkpoint (models/cache/papagei/papagei_s.pt,
+#      Zenodo 10.5281/zenodo.13983110, BSD-3-Clause-Clear) via the vendored reference
+#      architecture, to (a) fine-tune the trunk and (b) produce ground-truth embeddings
+#      for the NumPy-port parity gate.
+#   2. Fine-tuning the ~6M-param encoder on Apple-silicon MPS — a Mac training backend
+#      CLAUDE.md explicitly sanctions ("Mac now (MLX / PyTorch-MPS)" for "Biosignal
+#      encoders (PaPaGei-S ~6M), task heads").
+#
+# torch NEVER appears on the serving / feature-extraction path: inference runs as plain
+# NumPy (`ai/training/papagei_resnet.py`), parity-tested against the fine-tuned torch
+# model — same "serving stays DL-runtime-free" principle as the from-scratch encoder.
+#
+# CPU/MPS wheels only; no CUDA stack here (the H200 training path is deferred, CLAUDE.md).
+torch>=2.2

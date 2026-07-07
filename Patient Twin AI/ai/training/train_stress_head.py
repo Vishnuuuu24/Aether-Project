@@ -95,13 +95,27 @@ def run(
     val_fraction: float = 0.25,
     max_subjects: int | None = None,
     checkpoint_root: Path = DEFAULT_CHECKPOINT_ROOT,
+    papagei: bool = False,
 ) -> int:
     if not wesad_available(wesad_root):
         print(f"WESAD not found under {wesad_root} — nothing to train.", file=sys.stderr)
         return 2
 
-    weights = load_encoder_weights(encoder_checkpoint)
-    windows = load_wesad_wrist_bvp_stress_windows(wesad_root, max_subjects=max_subjects)
+    # Same logistic head; only the frozen embedding source differs. PaPaGei-S uses its
+    # 125 Hz / 10 s pretrained window contract; the from-scratch encoder uses 64 Hz / 8 s.
+    if papagei:
+        from ai.training.checkpoints import load_papagei_weights
+        from ai.training.papagei_resnet import papagei_embedding
+
+        weights = load_papagei_weights(encoder_checkpoint)
+        embed = papagei_embedding
+        windows = load_wesad_wrist_bvp_stress_windows(
+            wesad_root, max_subjects=max_subjects, target_fs_hz=125.0, window_seconds=10.0
+        )
+    else:
+        weights = load_encoder_weights(encoder_checkpoint)  # type: ignore[assignment]
+        embed = embed_windows
+        windows = load_wesad_wrist_bvp_stress_windows(wesad_root, max_subjects=max_subjects)
     print(f"windows: {len(windows)}  subjects: {list(windows.subjects)}")
     print(f"stress prevalence: {windows.labels.mean() * 100:.0f}%")
 
@@ -110,8 +124,8 @@ def run(
     )
     print(f"subjects: train={list(tr_subj)}  held-out={list(va_subj)}")
 
-    emb_tr = embed_windows(weights, windows.signals[tr_idx])
-    emb_va = embed_windows(weights, windows.signals[va_idx])
+    emb_tr = embed(weights, windows.signals[tr_idx])
+    emb_va = embed(weights, windows.signals[va_idx])
     y_tr = windows.labels[tr_idx].astype(np.float64)
     y_va = windows.labels[va_idx].astype(np.float64)
 
@@ -127,6 +141,7 @@ def run(
     provenance: dict[str, object] = {
         "dataset": "WESAD (wrist BVP)",
         "target": "stress-context (baseline vs TSST)",
+        "encoder": "papagei-s-finetuned" if papagei else "from-scratch-conv",
         "encoder_checkpoint": encoder_checkpoint.name,
         "train_subjects": list(tr_subj),
         "held_out_subjects": list(va_subj),
@@ -136,8 +151,9 @@ def run(
         "head": STRESS_HEAD_VERSION,
     }
     metrics = {"f1": score.f1, "auc": score.auc, "accuracy": score.accuracy}
+    head_name = "papagei-stress-head" if papagei else STRESS_HEAD_NAME
     handle = write_stress_head_checkpoint(
-        head, name=STRESS_HEAD_NAME, config={"seed": seed}, provenance=provenance,
+        head, name=head_name, config={"seed": seed}, provenance=provenance,
         metrics=metrics, root=checkpoint_root,
     )
     recommendation = evaluate_promotion(
@@ -163,6 +179,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", default=str(DEFAULT_WESAD_ROOT))
     parser.add_argument("--val-fraction", type=float, default=0.25)
     parser.add_argument("--max-subjects", type=int, default=None)
+    parser.add_argument("--papagei", action="store_true",
+                        help="the encoder ckpt is a fine-tuned PaPaGei-S (125Hz/10s windows)")
     args = parser.parse_args(argv)
     try:
         return run(
@@ -170,6 +188,7 @@ def _main(argv: list[str] | None = None) -> int:
             wesad_root=Path(args.root),
             val_fraction=args.val_fraction,
             max_subjects=args.max_subjects,
+            papagei=args.papagei,
         )
     except (WesadLayoutError, FileNotFoundError, ValueError) as exc:
         print(f"stress-head training failed: {exc}", file=sys.stderr)

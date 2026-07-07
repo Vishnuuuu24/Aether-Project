@@ -62,6 +62,7 @@ def _score_arm(
     subjects: list[str] | None,
     window_seconds: float,
     max_subjects: int | None,
+    target_fs_hz: float | None = None,
 ) -> ArmResult:
     labelled = load_wesad_wrist_bvp_labelled_deviations(
         root,
@@ -69,6 +70,7 @@ def _score_arm(
         subjects=subjects,
         window_seconds=window_seconds,
         max_subjects=max_subjects,
+        target_fs_hz=target_fs_hz,
     )
     return ArmResult(
         label=label,
@@ -86,10 +88,56 @@ def _print_arm(arm: ArmResult) -> None:
     )
 
 
+def _score_papagei_block(
+    root: Path,
+    papagei_checkpoint: Path,
+    *,
+    subjects: list[str] | None,
+    max_subjects: int | None,
+) -> None:
+    """Score the fine-tuned PaPaGei-S extractor vs classical DSP on the SAME resampled
+    125 Hz / 10 s wrist-BVP windows (the PaPaGei pretrained-input contract). This is the
+    honest test against the literal DoD bar (F1 ≥ 0.80 / ECE ≤ 0.15).
+
+    Deviation scoring reads only `heart_rate_bpm`, so a stress head is deliberately NOT
+    loaded here — it would compute `stress_probability` that this eval never consumes,
+    which would falsely imply it affects F1/ECE. The stress head is evaluated in its own
+    entry point (`train_stress_head.py`)."""
+    from ai.features.papagei_extractor import PapageiFeatureExtractor
+
+    print("\n── PaPaGei-S arm (resampled 125 Hz / 10 s windows) ──")
+    classical = _score_arm(
+        "classical DSP (125Hz)", root, WaveformFeatureExtractor(),
+        subjects=subjects, window_seconds=10.0, max_subjects=max_subjects,
+        target_fs_hz=125.0,
+    )
+    _print_arm(classical)
+    extractor = PapageiFeatureExtractor.from_checkpoint(papagei_checkpoint)
+    papagei = _score_arm(
+        "PaPaGei-S (finetuned)", root, extractor,
+        subjects=subjects, window_seconds=10.0, max_subjects=max_subjects,
+        target_fs_hz=125.0,
+    )
+    _print_arm(papagei)
+    delta = papagei.f1 - classical.f1
+    verb = "beats" if delta > 0 else ("ties" if abs(delta) < 1e-9 else "trails")
+    print(f"PaPaGei-S {verb} classical on wrist-BVP F1 by {delta:+.3f}")
+    meets = papagei.f1 >= CLASSICAL_F1_BAR and papagei.ece <= CLASSICAL_ECE_BAR
+    print(
+        f"vs literal DoD bar (F1 ≥ {CLASSICAL_F1_BAR:.2f} / ECE ≤ {CLASSICAL_ECE_BAR:.2f}): "
+        f"{'✅ MEETS' if meets else '❌ below'} "
+        f"(F1 {papagei.f1:.3f}, ECE {papagei.ece:.3f})"
+    )
+    print("\n── log entry (paste into docs/17_Training_Log.md) ──")
+    print(f"| PaPaGei-S deviation | F1 {papagei.f1:.3f} · ECE {papagei.ece:.3f} "
+          f"(classical@125Hz F1 {classical.f1:.3f}) |")
+
+
 def run(
     root: Path,
     *,
     checkpoint: Path | None,
+    papagei_checkpoint: Path | None = None,
     subjects: list[str] | None = None,
     window_seconds: float = 8.0,
     max_subjects: int | None = None,
@@ -133,6 +181,11 @@ def run(
         "report the honest number, don't force the bar."
     )
     _print_log_stub(classical=classical, encoder=encoder, window_seconds=window_seconds)
+
+    if papagei_checkpoint is not None:
+        _score_papagei_block(
+            root, papagei_checkpoint, subjects=subjects, max_subjects=max_subjects,
+        )
     return 0
 
 
@@ -149,7 +202,9 @@ def _print_log_stub(
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="WESAD wrist-BVP deviation eval.")
     parser.add_argument("--root", default=str(DEFAULT_WESAD_ROOT))
-    parser.add_argument("--checkpoint", default=None, help="encoder checkpoint dir (optional)")
+    parser.add_argument("--checkpoint", default=None, help="from-scratch encoder ckpt (optional)")
+    parser.add_argument("--papagei-checkpoint", default=None,
+                        help="fine-tuned PaPaGei-S ckpt (scores the 125Hz/10s arm vs the DoD bar)")
     parser.add_argument("--window-seconds", type=float, default=8.0)
     parser.add_argument("--max-subjects", type=int, default=None)
     args = parser.parse_args(argv)
@@ -158,6 +213,9 @@ def _main(argv: list[str] | None = None) -> int:
         return run(
             Path(args.root),
             checkpoint=Path(args.checkpoint) if args.checkpoint else None,
+            papagei_checkpoint=(
+                Path(args.papagei_checkpoint) if args.papagei_checkpoint else None
+            ),
             window_seconds=args.window_seconds,
             max_subjects=args.max_subjects,
         )

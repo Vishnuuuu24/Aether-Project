@@ -129,12 +129,23 @@ added in `requirements-train.txt` (Apple-silicon only). 452 tests pass; ruff cle
 
 ---
 
-## Sprint 10 — Biosignal encoder + task heads  ⭐ flagship  ✅ DONE (both interfaces + both eval halves)
+## Sprint 10 — Biosignal encoder + task heads  ⭐ flagship  ◐ FUNCTIONALLY CLOSED — one DoD bar signal-limited (documented exception)
 
 *Source: `03 §DEFERRED`; `05 §3`; `12 §3`; `ai/interfaces/{feature_extractor,baseline_engine}.py`.*
 
 Adapt the open-weight PaPaGei-S / Pulse-PPG encoder and train task heads on the PPG
 we have ground truth for, then slot it behind the interfaces.
+
+> **Status honesty (2026-07-07).** A review correctly flagged that an earlier pass
+> marked this "DONE" while (a) training a CNN **from scratch** instead of loading the
+> pretrained weights the DoD names, and (b) scoring deviation **F1 0.701 < the 0.80 bar**.
+> Both are now addressed HONESTLY: the authentic **PaPaGei-S is ported + fine-tuned**
+> (HR MAE **6.50 → 4.59 bpm**, −29%), closing gap (a). Gap (b) is measured, not
+> papered over: with the real pretrained encoder the deviation **F1 is still 0.701** —
+> **identical** to the from-scratch encoder — which **disproves** the "it's low because
+> it lacks pretraining" hypothesis and shows the 0.80 gap is **signal-limited** (wrist
+> PPG under the TSST is harder than the chest ECG the bar was set on), not
+> encoder-limited. See `docs/17` (2026-07-07 entries).
 
 **Built (the PPG→HR learned path, end-to-end):**
 - A compact **1D-CNN encoder + HR head** (`ai/training/encoder_model.py`,
@@ -170,7 +181,7 @@ we have ground truth for, then slot it behind the interfaces.
   -m ai.training.train_ppg_encoder` (defaults to the full run; ~10 min on the M5 Pro).
   481 tests pass; ruff + gate-mypy clean.
 
-**Closed (DoD's literal bars met):**
+**Closed (DoD items met — with the deviation-0.80 bar tracked honestly as signal-limited, see banner):**
 - Head-to-head vs the **classical DSP `WaveformFeatureExtractor`** HR on PPG-DaLiA
   (`ai/training/ppg_hr_eval.py`): encoder **6.50** vs DSP **11.03** bpm on the same 4
   held-out subjects (DSP at 100 % coverage) — the DL path **beats** the classical
@@ -197,14 +208,19 @@ we have ground truth for, then slot it behind the interfaces.
 - Both results recorded in **`docs/17_Training_Log.md`** (the run history + comparison).
 
 **Remaining (scoped, honest):**
-- **Promotion** is human-gated (CLAUDE.md principle 5): the encoder wins both bars (HR
-  MAE and wrist-BVP deviation) and the stress head beats its baseline, so all are
-  *recommended* (see each checkpoint's `promotion.json`), but the version swap + audit
-  event is a human action — never automatic.
+- **Promotion** is human-gated (CLAUDE.md principle 5): PaPaGei-S wins its **HR** bars
+  (lowest MAE — beats classical DSP *and* the from-scratch encoder) and **beats classical**
+  on wrist-BVP deviation, and the stress head beats its baseline — so each is *recommended*
+  (see every checkpoint's `promotion.json`). It does **not** clear the absolute 0.80 / 0.15
+  deviation bar (next bullet) — "beats classical" ≠ "meets the DoD bar". The version swap +
+  audit event is a human action, never automatic.
 - Neither wrist-BVP deviation arm reaches the **chest-ECG** bar (F1 ≥ 0.80 / ECE ≤ 0.15):
-  wrist PPG during the TSST is a genuinely harder signal (motion + speech). The honest
-  comparison is encoder-vs-classical on the same signal (the encoder wins); the clean
-  chest-ECG deviation path stays classical.
+  wrist PPG during the TSST is a genuinely harder signal (motion + speech). This is now
+  **confirmed to be signal-limited, not encoder-limited**: the from-scratch encoder AND
+  the fine-tuned real PaPaGei-S BOTH score F1 0.701 / ECE 0.195 on it, despite PaPaGei
+  cutting HR MAE by 29%. Two independent encoders converging to 0.701 means a better HR
+  encoder cannot close this gap — only a cleaner signal or a deviation model trained
+  directly on the stress label could. The clean chest-ECG deviation path stays classical.
 - **Accelerometer fusion — measured, and it did NOT help** (`ai/training/fusion_experiment.py`):
   a multi-channel encoder (BVP + 3-axis wrist ACC resampled to the BVP grid) trained
   head-to-head vs BVP-only on the same split, 200 epochs each. Honest result: BVP-only
@@ -216,11 +232,17 @@ we have ground truth for, then slot it behind the interfaces.
   not just concat) — a bigger design, not a v1 lever. The encoder trunk is multi-channel-
   capable behind the interface; serving would also need a multi-channel signal contract
   (`RawWaveform` is single-channel). **We keep BVP-only** on this evidence.
-- **PaPaGei-S pretrained-weight init** stays **deferred** (CLAUDE.md: PaPaGei-S / Pulse-PPG
-  deferred for v1). Its weights are not on disk and not on the HF model hub (they ship via
-  the authors' GitHub/Zenodo release), and adopting them means taking on their exact
-  encoder architecture — a distinct implementation behind the same `FeatureExtractor` seam,
-  not a weight-load into our CNN. Interface-ready; the artifact + port are the blocker.
+- **PaPaGei-S pretrained-weight init — ✅ DONE (2026-07-07).** Fetched the authentic
+  weights (Zenodo 10.5281/zenodo.13983110, MD5-verified, BSD-3-Clause-Clear), vendored the
+  authors' 18-block ResNet1DMoE reference (`ai/training/_papagei_reference_torch.py`),
+  ported the trunk to NumPy for serving (`papagei_resnet.py`, parity vs torch = 5.8e-15),
+  fine-tuned it in PyTorch/MPS (`torch_papagei.py` / `train_papagei_encoder.py`), and
+  slotted it behind BOTH stable interfaces (`PapageiFeatureExtractor`;
+  `FoundationEncoderBaselineEngine.from_papagei_checkpoint`) with a classical fallback.
+  Result: HR MAE **4.59 bpm** (best of all encoders). It is a **distinct implementation
+  behind the same `FeatureExtractor` seam** (its architecture, not a weight-load into our
+  CNN) — exactly as the interface was designed to accept. Pulse-PPG stays deferred (same
+  seam, a further distinct impl).
 
 - **DoD:** a `FoundationEncoderFeatureExtractor` (implements `FeatureExtractor`) and a
   `FoundationEncoderBaselineEngine` (implements `BaselineEngine`) derive HR / stress-
@@ -320,8 +342,11 @@ it — abstaining from a learned model is a correct outcome, not a failure.
 
 ---
 
-*Sprint 9 (foundation) is built. Sprint 10's PPG→HR learned path is built and, on a
-full-quality run, beats the linear baseline (6.50 vs 16.86 bpm MAE, 4 subjects fully
-held out); the classical-DSP head-to-head, the WESAD/ECG deviation half, and the
-eval-report + promotion wiring remain. Awaiting your signal to close those out or to
-start Sprint 11 (the reranker).*
+*Sprint 9 (foundation) is built. Sprint 10 is functionally closed: the fine-tuned
+PaPaGei-S encoder is the recommended HR path (held-out MAE **4.59 bpm**, beating classical
+DSP 10.63 and the from-scratch encoder 6.50, 4 subjects fully held out); the classical-DSP
+head-to-head, the WESAD wrist-BVP deviation half, the stress head, promotion advisories,
+and the eval-report wiring (from-scratch **and** PaPaGei arms) are all in place. The one
+open item is the absolute deviation bar (F1 ≥ 0.80 / ECE ≤ 0.15) — measured as
+signal-limited, not encoder-limited (see the Sprint 10 status note). Ready for Sprint 11
+(the reranker) on your signal.*

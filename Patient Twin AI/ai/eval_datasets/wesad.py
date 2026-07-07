@@ -242,6 +242,12 @@ def load_wesad_labelled_deviations(
 # (An earlier note wrongly called WESAD "ECG-only, different modality"; it is not.)
 
 _WRIST_BVP_FS = 64.0  # Empatica E4 wrist BVP sampling rate (Hz)
+# The E4 wrist and RespiBAN chest streams start together, so BVP·(700/64) should equal
+# the label count. Real WESAD is aligned to the sample (measured drift 0.00 s on all 15
+# subjects); a stream that is truncated or offset would clip-mislabel its tail silently.
+# 2 s is generous headroom over the observed 0 s — it never trips valid data but catches
+# gross misalignment.
+_WRIST_LABEL_MAX_DRIFT_S = 2.0
 
 
 def _load_subject_wrist_bvp(pkl_path: Path) -> tuple[FloatArray, IntArray]:
@@ -276,13 +282,25 @@ def _load_subject_wrist_bvp(pkl_path: Path) -> tuple[FloatArray, IntArray]:
         )
 
     ratio = _CHEST_ECG_FS / _WRIST_BVP_FS
+    drift_s = abs(bvp.size * ratio - labels.size) / _CHEST_ECG_FS
+    if drift_s > _WRIST_LABEL_MAX_DRIFT_S:
+        raise WesadLayoutError(
+            f"{pkl_path.name}: wrist BVP ({bvp.size / _WRIST_BVP_FS:.1f}s) and label stream "
+            f"({labels.size / _CHEST_ECG_FS:.1f}s) differ by {drift_s:.1f}s "
+            f"(> {_WRIST_LABEL_MAX_DRIFT_S:.0f}s) — truncated/offset stream would mislabel"
+        )
     label_idx = np.clip(np.round(np.arange(bvp.size) * ratio).astype(np.intp), 0, labels.size - 1)
     labels_bvp = labels[label_idx].astype(np.intp)
     return bvp, labels_bvp
 
 
 def _hr_reading_ppg(
-    patient_id: Any, segment: FloatArray, extractor: FeatureExtractor, ts: datetime
+    patient_id: Any,
+    segment: FloatArray,
+    extractor: FeatureExtractor,
+    ts: datetime,
+    *,
+    fs: float = _WRIST_BVP_FS,
 ) -> float | None:
     window = SignalWindow(
         patient_id=patient_id,
@@ -291,11 +309,26 @@ def _hr_reading_ppg(
         window_start=ts,
         window_end=ts,
         waveform=RawWaveform(
-            kind=WaveformKind.PPG, sample_rate_hz=_WRIST_BVP_FS, samples=segment.tolist()
+            kind=WaveformKind.PPG, sample_rate_hz=fs, samples=segment.tolist()
         ),
     )
     features = extractor.extract(window).features
     return features.get("heart_rate_bpm")
+
+
+def _resampled_wrist_bvp(
+    pkl_path: Path, target_fs_hz: float | None
+) -> tuple[FloatArray, IntArray, float]:
+    """Load wrist BVP + aligned labels, optionally polyphase-resampled to `target_fs_hz`
+    (PaPaGei's 125 Hz contract). `None` keeps the native 64 Hz stream unchanged."""
+    bvp, labels = _load_subject_wrist_bvp(pkl_path)
+    if target_fs_hz is None or abs(target_fs_hz - _WRIST_BVP_FS) < 1e-9:
+        return bvp, labels, _WRIST_BVP_FS
+    from ai.eval_datasets._resample import resample_labels_nearest, resample_poly_to
+
+    bvp_rs = resample_poly_to(bvp, _WRIST_BVP_FS, target_fs_hz)
+    labels_rs = resample_labels_nearest(labels, bvp_rs.size).astype(np.intp)
+    return bvp_rs, labels_rs, target_fs_hz
 
 
 def _subject_labelled_wrist_bvp(
@@ -304,9 +337,10 @@ def _subject_labelled_wrist_bvp(
     window_seconds: float,
     extractor: FeatureExtractor,
     config: BaselineConfig,
+    target_fs_hz: float | None = None,
 ) -> list[LabelledDeviation]:
-    bvp, labels = _load_subject_wrist_bvp(pkl_path)
-    window_samples = int(window_seconds * _WRIST_BVP_FS)
+    bvp, labels, fs = _resampled_wrist_bvp(pkl_path, target_fs_hz)
+    window_samples = int(window_seconds * fs)
     patient_id = uuid4()
     engine = StatisticalBaselineEngine(
         gate=SqiGate({"heart_rate": 0.0}), config=config, patient_id=patient_id
@@ -333,7 +367,7 @@ def _subject_labelled_wrist_bvp(
         (WESAD_STRESS_LABEL, stress_readings),
     ):
         for segment in _condition_windows(bvp, labels, label, window_samples):
-            hr = _hr_reading_ppg(patient_id, segment, extractor, _BASE_TS)
+            hr = _hr_reading_ppg(patient_id, segment, extractor, _BASE_TS, fs=fs)
             if hr is None:
                 continue
             sink.append(make_reading(hr, seq))
@@ -358,13 +392,17 @@ def load_wesad_wrist_bvp_labelled_deviations(
     window_seconds: float = 8.0,
     max_subjects: int | None = None,
     config: BaselineConfig | None = None,
+    target_fs_hz: float | None = None,
 ) -> list[LabelledDeviation]:
     """Parse WESAD wrist BVP (PPG @ 64 Hz) into labelled deviations via `extractor`.
 
     Mirrors `load_wesad_labelled_deviations` but on the wrist PPG channel, so the
-    SAME harness scores either the classical DSP extractor or the learned
-    `FoundationEncoderFeatureExtractor`. Default window is 8 s (512 samples) — the
-    encoder's trained window length — so both extractors see identical inputs.
+    SAME harness scores either the classical DSP extractor or a learned extractor over
+    identical windows. Default window is 8 s (512 samples) at the native 64 Hz — the
+    from-scratch encoder's trained length. Set `target_fs_hz` (e.g. 125.0) with
+    `window_seconds=10.0` to resample to the PaPaGei-S pretrained input contract; both
+    the extractor under test and its classical fallback then see the SAME resampled
+    windows, keeping the head-to-head fair.
     """
     files = _subject_files(root)
     if subjects is not None:
@@ -380,7 +418,8 @@ def load_wesad_wrist_bvp_labelled_deviations(
     for pkl_path in files:
         labelled.extend(
             _subject_labelled_wrist_bvp(
-                pkl_path, window_seconds=window_seconds, extractor=extractor, config=cfg
+                pkl_path, window_seconds=window_seconds, extractor=extractor, config=cfg,
+                target_fs_hz=target_fs_hz,
             )
         )
     return labelled
@@ -415,12 +454,14 @@ def load_wesad_wrist_bvp_stress_windows(
     window_seconds: float = 8.0,
     max_subjects: int | None = None,
     max_windows_per_condition: int | None = None,
+    target_fs_hz: float | None = None,
 ) -> StressWindows:
     """Cut WESAD wrist BVP into raw windows labelled baseline(0)/stress(1), tagged with
     the subject stem so a stress head can be trained/evaluated subject-held-out.
 
-    The default 8 s window = 512 samples = the encoder's trained window length, so the
-    same encoder trunk embeds these windows (docs/16 Sprint 10 stress head).
+    The default 8 s window = 512 samples at native 64 Hz = the from-scratch encoder's
+    trained length. Set `target_fs_hz=125.0` with `window_seconds=10.0` to emit the
+    PaPaGei-S pretrained contract (1250 samples) for the fine-tuned trunk's stress head.
     """
     files = _subject_files(root)
     if subjects is not None:
@@ -431,12 +472,13 @@ def load_wesad_wrist_bvp_stress_windows(
     if not files:
         raise WesadLayoutError(f"no WESAD subject pickles found under {root}")
 
-    window_samples = int(window_seconds * _WRIST_BVP_FS)
+    fs = target_fs_hz if target_fs_hz is not None else _WRIST_BVP_FS
+    window_samples = int(window_seconds * fs)
     all_sig: list[FloatArray] = []
     all_lab: list[int] = []
     subject_ids: list[str] = []
     for pkl_path in files:
-        bvp, labels = _load_subject_wrist_bvp(pkl_path)
+        bvp, labels, _ = _resampled_wrist_bvp(pkl_path, target_fs_hz)
         stem = pkl_path.parent.name
         for label, y in ((WESAD_BASELINE_LABEL, 0), (WESAD_STRESS_LABEL, 1)):
             windows = _condition_windows(bvp, labels, label, window_samples)
@@ -453,6 +495,6 @@ def load_wesad_wrist_bvp_stress_windows(
         signals=np.asarray(all_sig, dtype=np.float64),
         labels=np.asarray(all_lab, dtype=np.intp),
         subject_ids=tuple(subject_ids),
-        sample_rate_hz=_WRIST_BVP_FS,
+        sample_rate_hz=fs,
         window_samples=window_samples,
     )

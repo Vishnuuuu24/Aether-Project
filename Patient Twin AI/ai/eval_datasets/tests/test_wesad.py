@@ -175,6 +175,25 @@ def test_wrist_bvp_missing_block_raises(tmp_path: Path) -> None:
         load_wesad_wrist_bvp_labelled_deviations(tmp_path, extractor=WaveformFeatureExtractor())
 
 
+def test_wrist_bvp_duration_mismatch_raises(tmp_path: Path) -> None:
+    """A truncated/offset wrist stream (BVP span ≠ label span) must fail loudly, not
+    silently clip-mislabel its tail (real WESAD is aligned to 0.00 s; guard tolerance 2 s)."""
+    sub = tmp_path / "S1"
+    sub.mkdir()
+    # BVP covers ~300 s @ 64 Hz but the label stream spans ~600 s @ 700 Hz — 300 s drift.
+    bvp = np.concatenate([_bvp_at(65.0, 150.0, seed=3), _bvp_at(100.0, 150.0, seed=4)])
+    labels = np.concatenate(
+        [
+            np.full(int(300.0 * _FS), WESAD_BASELINE_LABEL, dtype=int),
+            np.full(int(300.0 * _FS), WESAD_STRESS_LABEL, dtype=int),
+        ]
+    )
+    with (sub / "S1.pkl").open("wb") as fh:
+        pickle.dump({"signal": {"wrist": {"BVP": bvp.reshape(-1, 1)}}, "label": labels}, fh)
+    with pytest.raises(WesadLayoutError, match="differ by"):
+        load_wesad_wrist_bvp_labelled_deviations(tmp_path, extractor=WaveformFeatureExtractor())
+
+
 @pytest.mark.skipif(not wesad_available(_REAL_ROOT), reason="WESAD dataset not on disk")
 def test_real_wesad_wrist_bvp_sanity() -> None:
     labelled = load_wesad_wrist_bvp_labelled_deviations(

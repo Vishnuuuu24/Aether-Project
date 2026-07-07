@@ -250,6 +250,63 @@ def _ppg_dalia_hr_section(
     return MetricSection(name="ppg_hr", dataset="PPG-DaLiA", metrics=metrics)
 
 
+def _ppg_dalia_papagei_hr_section(root: Path, *, papagei_checkpoint: Path) -> MetricSection:
+    """Real PPG-DaLiA HR for the fine-tuned PaPaGei-S encoder — the recommended HR path
+    (docs/16 Sprint 10). Classical DSP and PaPaGei on the SAME 125 Hz / 10 s held-out
+    windows (its own geometry, distinct from the from-scratch `ppg_hr` section). The
+    held-out subjects match fine-tuning's split — no leakage (see `evaluate_papagei_holdout`).
+    """
+    from ai.training.checkpoints import load_papagei_weights
+    from ai.training.ppg_hr_eval import evaluate_papagei_holdout
+
+    weights = load_papagei_weights(papagei_checkpoint)
+    h = evaluate_papagei_holdout(root, weights=weights)
+    metrics = {
+        "classical_hr_mae": h.classical["mae"],
+        "classical_coverage": h.classical["coverage"],
+        "n": float(h.n_val),
+    }
+    if h.encoder is not None:
+        metrics["papagei_hr_mae"] = h.encoder["mae"]
+    return MetricSection(name="ppg_hr_papagei", dataset="PPG-DaLiA", metrics=metrics)
+
+
+def _wesad_wrist_bvp_papagei_section(
+    root: Path, *, papagei_checkpoint: Path, max_subjects: int
+) -> MetricSection:
+    """WESAD wrist-BVP deviation for the fine-tuned PaPaGei-S extractor vs classical DSP on
+    the SAME resampled 125 Hz / 10 s windows (PaPaGei's pretrained contract) — the honest
+    read against the literal 0.80 / 0.15 DoD bar (docs/16 Sprint 10; see docs/17). This is
+    the wrist signal, harder than the chest-ECG the bar was set on, so a below-bar F1 here
+    is the measured reality, not a regression.
+    """
+    from ai.eval_datasets.wesad import load_wesad_wrist_bvp_labelled_deviations
+    from ai.features.papagei_extractor import PapageiFeatureExtractor
+    from ai.features.waveform_extractor import WaveformFeatureExtractor
+
+    classical = load_wesad_wrist_bvp_labelled_deviations(
+        root, extractor=WaveformFeatureExtractor(), max_subjects=max_subjects,
+        window_seconds=10.0, target_fs_hz=125.0,
+    )
+    papagei = load_wesad_wrist_bvp_labelled_deviations(
+        root, extractor=PapageiFeatureExtractor.from_checkpoint(papagei_checkpoint),
+        max_subjects=max_subjects, window_seconds=10.0, target_fs_hz=125.0,
+    )
+    cd, ce = detection_metrics(classical), expected_calibration_error(classical)
+    pd_, pe = detection_metrics(papagei), expected_calibration_error(papagei)
+    return MetricSection(
+        name="deviation_wrist_bvp_papagei",
+        dataset="WESAD-wrist-BVP",
+        metrics={
+            "classical_f1": cd.f1,
+            "classical_ece": ce.ece,
+            "papagei_f1": pd_.f1,
+            "papagei_ece": pe.ece,
+            "n": float(pd_.n),
+        },
+    )
+
+
 def _wesad_wrist_bvp_dl_section(
     root: Path, *, encoder_checkpoint: Path, max_subjects: int
 ) -> MetricSection:
@@ -372,6 +429,7 @@ def build_report(
     wesad_max_subjects: int = 3,
     ppg_root: Path | None = DEFAULT_PPG_DALIA_ROOT,
     ppg_encoder_checkpoint: Path | None = None,
+    papagei_encoder_checkpoint: Path | None = None,
     ppg_max_windows_per_subject: int = 300,
 ) -> EvalReport:
     """Build the aggregated eval report.
@@ -380,8 +438,11 @@ def build_report(
     REAL stress-vs-baseline numbers (dataset="WESAD", via T8.1 HR + T8.2 adapter) and
     the WESAD gap is dropped; otherwise they run on synthetic smoke and the gap is
     logged. Likewise a present `ppg_root` adds a real `ppg_hr` (PPG-DaLiA) section
-    (classical DSP HR, plus the encoder when `ppg_encoder_checkpoint` is given). Pass
-    `wesad_root=None` / `ppg_root=None` to force the synthetic path (deterministic tests).
+    (classical DSP HR, plus the encoder when `ppg_encoder_checkpoint` is given). When
+    `papagei_encoder_checkpoint` is given, the fine-tuned PaPaGei-S encoder (the
+    recommended HR path) adds its own `ppg_hr_papagei` and `deviation_wrist_bvp_papagei`
+    sections on its 125 Hz / 10 s contract. Pass `wesad_root=None` / `ppg_root=None` to
+    force the synthetic path (deterministic tests).
     """
     vs = versions or VersionRegistry.from_env().current()
     wesad_wired = wesad_root is not None and wesad_available(wesad_root)
@@ -420,6 +481,21 @@ def build_report(
             _wesad_wrist_bvp_dl_section(
                 wesad_root,
                 encoder_checkpoint=ppg_encoder_checkpoint,
+                max_subjects=wesad_max_subjects,
+            )
+        )
+    # The recommended PaPaGei-S path (its own 125 Hz / 10 s geometry), when configured.
+    if ppg_wired and papagei_encoder_checkpoint is not None:
+        assert ppg_root is not None
+        report.sections.append(
+            _ppg_dalia_papagei_hr_section(ppg_root, papagei_checkpoint=papagei_encoder_checkpoint)
+        )
+    if wesad_wired and papagei_encoder_checkpoint is not None:
+        assert wesad_root is not None
+        report.sections.append(
+            _wesad_wrist_bvp_papagei_section(
+                wesad_root,
+                papagei_checkpoint=papagei_encoder_checkpoint,
                 max_subjects=wesad_max_subjects,
             )
         )

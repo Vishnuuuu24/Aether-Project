@@ -172,6 +172,123 @@ def load_encoder_weights(handle_or_path: CheckpointHandle | Path) -> EncoderWeig
     )
 
 
+def write_papagei_checkpoint(
+    weights: object,
+    *,
+    name: str,
+    config: object,
+    provenance: dict[str, object],
+    metrics: dict[str, float] | None = None,
+    root: Path = DEFAULT_CHECKPOINT_ROOT,
+    now: datetime | None = None,
+) -> CheckpointHandle:
+    """Write a fine-tuned PaPaGei-S trunk + HR head (`papagei.npz` + `manifest.json`).
+
+    Serialises only the *learned* tensors of `PapageiEncoderWeights`; the per-block
+    geometry (channels/stride/downsample) is deterministic and recomputed on load via
+    `block_geometry()`. Same content-addressed identity scheme as the other writers.
+    """
+    from ai.training.papagei_resnet import BatchNormParams, PapageiEncoderWeights
+
+    assert isinstance(weights, PapageiEncoderWeights)
+    is_instance = is_dataclass(config) and not isinstance(config, type)
+    config_dict = asdict(config) if is_instance else config
+    identity = {"name": name, "config": config_dict, "provenance": provenance}
+    version = f"{name}@{_hash_identity(identity)}"
+    out_dir = root / version
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _bn_arrays(prefix: str, bn: BatchNormParams) -> dict[str, np.ndarray]:
+        return {
+            f"{prefix}_gamma": bn.gamma, f"{prefix}_beta": bn.beta,
+            f"{prefix}_mean": bn.running_mean, f"{prefix}_var": bn.running_var,
+        }
+
+    arrays: dict[str, np.ndarray] = {
+        "first_conv_w": weights.first_conv_w,
+        "first_conv_b": weights.first_conv_b,
+        "head_w": weights.head_w,
+        "n_blocks": np.array([len(weights.blocks)]),
+    }
+    arrays.update(_bn_arrays("first_bn", weights.first_bn))
+    arrays.update(_bn_arrays("final_bn", weights.final_bn))
+    for i, blk in enumerate(weights.blocks):
+        arrays.update(_bn_arrays(f"b{i}_bn1", blk.bn1))
+        arrays.update(_bn_arrays(f"b{i}_bn2", blk.bn2))
+        arrays[f"b{i}_conv1_w"] = blk.conv1_w
+        arrays[f"b{i}_conv1_b"] = blk.conv1_b
+        arrays[f"b{i}_conv2_w"] = blk.conv2_w
+        arrays[f"b{i}_conv2_b"] = blk.conv2_b
+    np.savez(out_dir / "papagei.npz", **arrays)
+
+    manifest: dict[str, object] = {
+        "name": name,
+        "version": version,
+        "kind": "papagei_s_hr_encoder",
+        "created_at": (now or datetime.now(UTC)).isoformat(),
+        "config": config_dict,
+        "provenance": provenance,
+        "metrics": metrics or {},
+        "head_b": weights.head_b,
+        "hr_mean": weights.hr_mean,
+        "hr_std": weights.hr_std,
+        "sample_rate_hz": weights.sample_rate_hz,
+        "window_samples": weights.window_samples,
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+    return CheckpointHandle(path=out_dir, version=version, manifest=manifest)
+
+
+def load_papagei_weights(handle_or_path: CheckpointHandle | Path) -> object:
+    """Reload a fine-tuned `PapageiEncoderWeights` — NumPy only, no torch/MLX needed."""
+    from ai.training.papagei_resnet import (
+        BatchNormParams,
+        BlockParams,
+        PapageiEncoderWeights,
+        block_geometry,
+    )
+
+    path = handle_or_path.path if isinstance(handle_or_path, CheckpointHandle) else handle_or_path
+    manifest = json.loads((path / "manifest.json").read_text())
+    npz = np.load(path / "papagei.npz", allow_pickle=False)
+
+    def _bn(prefix: str) -> BatchNormParams:
+        return BatchNormParams(
+            gamma=npz[f"{prefix}_gamma"].astype(np.float64),
+            beta=npz[f"{prefix}_beta"].astype(np.float64),
+            running_mean=npz[f"{prefix}_mean"].astype(np.float64),
+            running_var=npz[f"{prefix}_var"].astype(np.float64),
+        )
+
+    schedule = block_geometry()
+    blocks: list[BlockParams] = []
+    for i, meta in enumerate(schedule):
+        blocks.append(
+            BlockParams(
+                is_first_block=meta.is_first_block, downsample=meta.downsample,
+                stride=meta.stride, in_channels=meta.in_channels,
+                out_channels=meta.out_channels,
+                bn1=_bn(f"b{i}_bn1"), conv1_w=npz[f"b{i}_conv1_w"].astype(np.float64),
+                conv1_b=npz[f"b{i}_conv1_b"].astype(np.float64),
+                bn2=_bn(f"b{i}_bn2"), conv2_w=npz[f"b{i}_conv2_w"].astype(np.float64),
+                conv2_b=npz[f"b{i}_conv2_b"].astype(np.float64),
+            )
+        )
+    return PapageiEncoderWeights(
+        first_conv_w=npz["first_conv_w"].astype(np.float64),
+        first_conv_b=npz["first_conv_b"].astype(np.float64),
+        first_bn=_bn("first_bn"),
+        blocks=tuple(blocks),
+        final_bn=_bn("final_bn"),
+        head_w=npz["head_w"].astype(np.float64),
+        head_b=float(manifest["head_b"]),
+        hr_mean=float(manifest["hr_mean"]),
+        hr_std=float(manifest["hr_std"]),
+        sample_rate_hz=float(manifest["sample_rate_hz"]),
+        window_samples=int(manifest["window_samples"]),
+    )
+
+
 def write_stress_head_checkpoint(
     head: object,
     *,

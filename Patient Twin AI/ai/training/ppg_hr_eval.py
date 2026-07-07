@@ -113,3 +113,39 @@ def evaluate_holdout(
     return HeadToHead(
         held_out_subjects=val_subj, n_val=int(len(y_va)), classical=classical, encoder=encoder
     )
+
+
+def evaluate_papagei_holdout(
+    root: Path,
+    *,
+    weights: object | None = None,
+    seed: int = _DEFAULT_SEED,
+    val_fraction: float = _DEFAULT_VAL_FRACTION,
+    max_windows_per_subject: int | None = None,
+) -> HeadToHead:
+    """PaPaGei-S variant of `evaluate_holdout`: classical DSP and the fine-tuned PaPaGei-S
+    encoder on the SAME subject-held-out windows, at PaPaGei's 125 Hz / 10 s pretrained
+    contract (its geometry differs from the from-scratch encoder's 64 Hz / 8 s, so it
+    needs its own window loader). `weights` is a `PapageiEncoderWeights`; None scores
+    classical only. The default seed / val_fraction match `train_papagei_encoder` (both
+    `DEFAULT_SEED` / 0.25), so the held-out subjects are exactly the ones fine-tuning
+    never saw — no leakage."""
+    from ai.eval_datasets.ppg_dalia import load_ppg_dalia_hr_papagei_windows
+    from ai.training.papagei_resnet import PapageiEncoderWeights
+    from ai.training.papagei_resnet import predict_hr as papagei_predict_hr
+
+    windows = load_ppg_dalia_hr_papagei_windows(
+        root, max_windows_per_subject=max_windows_per_subject
+    )
+    _, val_idx, _, val_subj = subject_held_out_split(
+        windows.subject_ids, val_fraction=val_fraction, seed=seed
+    )
+    sig_va, y_va = windows.signals[val_idx], windows.targets[val_idx]
+    classical = _score(classical_hr_predictions(sig_va, windows.sample_rate_hz), y_va)
+    encoder = None
+    if weights is not None:
+        assert isinstance(weights, PapageiEncoderWeights)
+        encoder = _score(papagei_predict_hr(weights, sig_va), y_va)
+    return HeadToHead(
+        held_out_subjects=val_subj, n_val=int(len(y_va)), classical=classical, encoder=encoder
+    )
