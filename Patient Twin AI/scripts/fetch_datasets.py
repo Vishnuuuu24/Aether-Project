@@ -15,6 +15,7 @@ intentionally NOT in this script — see the per-dataset READMEs under `datasets
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -85,7 +86,25 @@ def fetch_hf(key: str) -> None:
         allow_patterns=allow_patterns,
         ignore_patterns=["README.md", ".gitattributes"],
     )
+    if key == "nfcorpus":
+        _fetch_nfcorpus_qrels(dest)
     print(f"[{key}] done", flush=True)
+
+
+def _fetch_nfcorpus_qrels(dest: Path) -> None:
+    """BeIR/nfcorpus ships only corpus+queries; its human relevance judgements live in
+    the sibling `BeIR/nfcorpus-qrels` repo. The Sprint 11 reranker training + IR eval
+    need these graded qrels, so fetch train/dev/test into `<dest>/qrels/`."""
+    from huggingface_hub import hf_hub_download
+
+    qrels_dir = dest / "qrels"
+    qrels_dir.mkdir(parents=True, exist_ok=True)
+    for split in ("train", "dev", "test"):
+        src = hf_hub_download(
+            "BeIR/nfcorpus-qrels", f"{split}.tsv", repo_type="dataset"
+        )
+        shutil.copyfile(src, qrels_dir / f"{split}.tsv")
+    print("[nfcorpus] qrels (train/dev/test) fetched", flush=True)
 
 
 def fetch_icd10cm() -> None:

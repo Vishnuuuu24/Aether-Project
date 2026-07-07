@@ -11,3 +11,6 @@ transformers>=4.44
 torch>=2.2
 docling>=2.0
 huggingface-hub>=0.24
+# Reads the BEIR nfcorpus corpus/queries parquet for the Sprint 11 reranker
+# fine-tune + medical-IR eval (ai/eval_datasets/nfcorpus.py).
+pyarrow>=17

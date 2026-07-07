@@ -264,9 +264,15 @@ we have ground truth for, then slot it behind the interfaces.
 
 ---
 
-## Sprint 11 — Reranker fine-tune (cross-encoder)
+## Sprint 11 — Reranker fine-tune (cross-encoder)  ◑ CODE COMPLETE · RUN DEFERRED → H200
 
 *Source: `03 §reranker`; `11 §component benchmarks` ("Reranker lift"); `12 §3`.*
+
+**Status (2026-07-07): all code + data + tests landed and gate-green on the Mac; the
+fine-tune RUN is deferred to the H200.** Measured MPS throughput is ~5 s/step (mixed
+precision made it *slower* — see `docs/17`), so the full-quality run is ~18 h on the
+MacBook vs **minutes on the H200** (CUDA). Same script, no code change — `sentence-
+transformers` auto-selects CUDA on the server. ⏳ **Waiting on GPU access to execute.**
 
 - **DoD:** a fine-tuned `bge-reranker-v2-m3` wrapped as a new `Retriever` reranker
   implementation shows **measurable lift** (recall@k / nDCG / MRR, with vs without the
@@ -280,6 +286,32 @@ we have ground truth for, then slot it behind the interfaces.
 - **Do:** hold out queries for eval; report the honest lift number even if small.
 - **Don't:** train on the eval split; fabricate relevance labels; swap the retrieval
   call site.
+
+### What is BUILT (Mac, gate-green) vs what runs on the H200
+
+| Built now (Mac) | File | State |
+|---|---|---|
+| nfcorpus IR loader (corpus/queries parquet + graded qrels) | `ai/eval_datasets/nfcorpus.py` | ✅ + tests |
+| qrels fetch (`BeIR/nfcorpus-qrels`) wired into fetcher | `scripts/fetch_datasets.py` | ✅ |
+| Training-pair builder (qrels positives + BM25 hard negatives, positive-cap) | `ai/training/rerank_pairs.py` | ✅ + tests |
+| A/B lift eval (reuses `ai/retrieval/eval.py` metrics) | `ai/training/rerank_eval.py` | ✅ + tests |
+| `FineTunedReranker` seam impl (versioned; lexical fallback, never raises) | `ai/retrieval/reranker.py` | ✅ + tests |
+| Full-quality trainer (best-val ckpt, content-addressed, `promotion.json`, docs/17 stub) | `ai/training/train_reranker.py` | ✅ (`--smoke` validated shape) |
+
+**The one deferred step is the fine-tune RUN itself** (needs the GPU). Recipe locked in:
+all 2590 train queries, **positives capped at 10/query** (drops the noisy broad-query
+tail where a handful of queries mark hundreds–1363 of 3633 docs "relevant" — a *quality*
+control, not a data cap), 4 BM25 hard negatives, 2 epochs, best-validation checkpoint on
+a 200-query DEV subset; the **held-out TEST split uses the full relevant set** for the
+honest reported lift.
+
+**Run command (identical on Mac or H200; CUDA auto-detected on the server):**
+```
+python -m ai.training.train_reranker            # full-quality (epochs 2, cap 10, neg 4)
+python -m ai.training.train_reranker --smoke    # fast tail validation (do this FIRST on the box)
+```
+Needs `requirements-ml.txt` (adds `pyarrow`) installed. On the Mac a long run needs
+`caffeinate -s` + lid open (it sleeps on lid-close). On the H200 neither applies.
 
 ---
 
@@ -309,6 +341,20 @@ reranker) is the bottleneck. Contrastive fine-tune of MedCPT/BGE on medical pair
 behind the embedder seam, scored on the same retrieval harness. Same DoD shape.
 
 ---
+
+## Deferred to the H200 — Sprint 11 reranker fine-tune RUN (⏳ pending GPU access)
+
+*Unlike the 35B, this one **can** run on the Mac — it's just slow (~18 h vs minutes on
+CUDA), so we moved the RUN to the server by choice, not necessity. All code is done and
+gate-green (see Sprint 11 above).* **When GPU access lands:**
+1. `pip install -r requirements-ml.txt` (adds `pyarrow`); ensure `datasets/nfcorpus/`
+   (corpus + queries + `qrels/`) is present — `python scripts/fetch_datasets.py --dataset nfcorpus`.
+2. `python -m ai.training.train_reranker --smoke` — seconds on CUDA; confirms the
+   train→save→reload→eval→manifest tail before the full run.
+3. `python -m ai.training.train_reranker` — the full-quality run (epochs 2, positives
+   cap 10, 4 hard negatives, best-val on DEV, honest lift on held-out TEST).
+4. Paste the printed stub into `docs/17`, add the judgement, update the Sprint 11
+   status here + the `sprint11-reranker` memory. Promotion stays **human-gated**.
 
 ## Deferred to the H200 — Qwen3.6 35B A3B QLoRA (prep on Mac, train on server)
 

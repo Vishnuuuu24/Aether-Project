@@ -40,6 +40,29 @@ wrist PPG under stress/motion is a harder signal, so read these as encoder-vs-cl
 
 ## Entries (newest first)
 
+### 2026-07-07 · Sprint 11 · Reranker fine-tune — **BUILT + gate-green; RUN deferred → H200** ⏳
+- **What:** the full Sprint 11 reranker pipeline (`bge-reranker-v2-m3` fine-tune on BEIR
+  nfcorpus medical IR) — loader, qrels fetch, BM25-hard-negative pair builder, A/B lift
+  eval (reuses `ai/retrieval/eval.py` metrics), `FineTunedReranker` seam impl (versioned,
+  lexical fallback), and the full-quality trainer. All code + tests landed, ruff/mypy
+  clean, fast suite green. **No fine-tuned checkpoint yet — the training RUN is deferred.**
+- **How / why deferred:** measured real MPS throughput on the 568M cross-encoder =
+  **~5.0 s/step** at batch 16 / seq 512 (isolated fwd+bwd probe; the first attempt's
+  "257 s/step" was laptop-sleep time miscounted by tqdm). Mixed precision made it *worse*
+  on MPS (fp16 6.4 s, bf16 7.8 s vs fp32 4.9 s) — no speedup lever. Uncapped nfcorpus is
+  ~48 h/**epoch**; even the quality-capped recipe is ~18 h on the Mac. Decision (user):
+  run it on the **H200** where the same script (CUDA auto-selected) finishes in minutes.
+- **Recipe locked for the run:** all 2590 train queries · positives capped 10/query
+  (drops the noisy broad-query tail — a handful of queries mark hundreds–1363 of 3633
+  docs relevant; quality control, not a data cap) · 4 BM25 hard negatives · 2 epochs ·
+  best-val on a 200-query DEV subset · honest lift on held-out **TEST** with the full
+  relevant set. `python -m ai.training.train_reranker` (`--smoke` first to validate the
+  tail in seconds on CUDA).
+- **Good / bad:** ✅ clean Mac↔server split — the flagship-slow job moves to the GPU that
+  exists for it, with zero code change and full plumbing pre-validated. ⏳ result pending
+  GPU access; DoD (measurable held-out lift) will be filled here post-run.
+- **Next lever:** on the box — `--smoke`, then the full run; paste the printed stub here.
+
 ### 2026-07-07 · Sprint 10 · **PaPaGei-S pretrained encoder, fine-tuned** · `papagei-s-hr-encoder@5192b7651ac8`
 - **What:** the DoD's literal "load the pretrained encoder weights / fine-tune the
   pretrained encoder" — closes the gap a review flagged (we had trained from scratch).
