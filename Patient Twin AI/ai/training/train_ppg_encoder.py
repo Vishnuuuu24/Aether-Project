@@ -31,6 +31,7 @@ from ai.training.checkpoints import (
 )
 from ai.training.encoder_model import predict_hr
 from ai.training.mlx_encoder import EncoderConfig, EpochLog, train_encoder
+from ai.training.promotion import Bar, evaluate_promotion, write_promotion_recommendation
 from ai.training.report import render_encoder_report, write_report
 from ai.training.splits import subject_held_out_split
 
@@ -149,7 +150,7 @@ def run(
         "n_val": int(len(y_va)),
         "window_samples": windows.window_samples,
         "sample_rate_hz": windows.sample_rate_hz,
-        "architecture": "conv1d(16,32,64)+GAP+linear",
+        "architecture": "conv1d(32,64,128,128)+GAP+linear",
         "split": "subject-held-out",
     }
     metrics = {
@@ -162,6 +163,16 @@ def run(
     )
     register_checkpoint_version(handle.version)  # stamp derived registry (no mutation)
 
+    # Advisory promotion recommendation (human-gated; never auto-promotes — CLAUDE.md §5).
+    recommendation = evaluate_promotion(
+        handle.version,
+        [
+            Bar("hr_mae_vs_classical_dsp", enc_mae, dsp_mae, higher_is_better=False),
+            Bar("hr_mae_vs_linear_baseline", enc_mae, baseline_mae, higher_is_better=False),
+        ],
+    )
+    write_promotion_recommendation(recommendation, handle.path)
+
     beats_dsp = enc_mae < dsp_mae
     beats_lin = enc_mae < baseline_mae
     verdict = "WINS vs classical DSP + linear" if (beats_dsp and beats_lin) else "review"
@@ -170,6 +181,8 @@ def run(
     print(f"classical DSP HR MAE {dsp_mae:.2f} bpm  (coverage {dsp_cov * 100:.0f}%)")
     print(f"linear baseline  HR MAE {baseline_mae:.2f} bpm")
     print(f"-> {verdict}")
+    rec = "✅ RECOMMENDED for promotion" if recommendation.recommended else "not recommended"
+    print(f"promotion: {rec} (advisory; a human runs the gate) — {recommendation.rationale}")
     print(f"checkpoint: {handle.path}")
     _print_log_stub(
         version=handle.version, provenance=provenance, best_epoch=history.best_epoch,

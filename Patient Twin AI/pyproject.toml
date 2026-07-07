@@ -17,6 +17,15 @@ ignore_missing_imports = true
 # Alembic migrations are generated artifacts (not hand-authored) — skip type checks.
 exclude = ["^core/db/migrations/"]
 
+# The strict gate is `mypy schemas core services` — `ai/` (MLX/NumPy training code) is
+# intentionally OUT of it (CLAUDE.md). When a gate target imports `ai.*` (e.g. the
+# learned BaselineEngine/FeatureExtractor behind the stable interfaces), follow it
+# silently so `ai/`'s loose numeric typing never turns the gate red. Run mypy on `ai/`
+# directly if you want to check it.
+[[tool.mypy.overrides]]
+module = ["ai.*"]
+follow_imports = "silent"
+
 # Tests aren't held to strict def/generic annotation rules (fixtures, helpers).
 [[tool.mypy.overrides]]
 module = ["core.*.tests.*", "schemas.tests.*", "services.*.tests.*", "ai.*.tests.*"]

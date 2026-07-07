@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from ai.baseline.statistical import StatisticalBaselineEngine
 from ai.features.sqi import SqiGate
 from ai.features.waveform import FloatArray, IntArray
 from ai.features.waveform_extractor import WaveformFeatureExtractor
+from ai.interfaces.feature_extractor import FeatureExtractor
 from schemas.features import RawWaveform, SignalWindow, WaveformKind
 from schemas.reading import MeasurementContext, MetricCode, Reading
 
@@ -229,3 +231,228 @@ def load_wesad_labelled_deviations(
             _subject_labelled(pkl_path, window_seconds=window_seconds, extractor=ext, config=cfg)
         )
     return labelled
+
+
+# -- wrist-BVP (PPG @ 64 Hz) deviation path — for the learned encoder ---------
+#
+# WESAD's wrist block also carries a BVP (PPG) channel at 64 Hz (Empatica E4). This
+# is the SAME modality the Sprint 10 encoder was trained on (PPG-DaLiA), so the
+# learned deviation path CAN be scored here — feed either the classical DSP extractor
+# or the FoundationEncoder extractor over the identical windows for a fair head-to-head.
+# (An earlier note wrongly called WESAD "ECG-only, different modality"; it is not.)
+
+_WRIST_BVP_FS = 64.0  # Empatica E4 wrist BVP sampling rate (Hz)
+
+
+def _load_subject_wrist_bvp(pkl_path: Path) -> tuple[FloatArray, IntArray]:
+    """Load one subject's wrist BVP and the protocol label aligned to each BVP sample.
+
+    Labels are co-sampled with the 700 Hz chest stream; the E4 wrist starts at the
+    same instant, so BVP sample i (at 64 Hz) maps to label index round(i * 700/64).
+    Returns (wrist_bvp[N], labels_at_bvp[N]) — both length N.
+    """
+    with pkl_path.open("rb") as fh:
+        raw: Any = pickle.load(fh, encoding="latin1")  # noqa: S301 - trusted local dataset
+
+    if not isinstance(raw, dict) or "signal" not in raw or "label" not in raw:
+        raise WesadLayoutError(f"{pkl_path.name}: missing 'signal'/'label' top-level keys")
+    signal = raw["signal"]
+    if not isinstance(signal, dict) or "wrist" not in signal:
+        raise WesadLayoutError(f"{pkl_path.name}: signal has no 'wrist' block")
+    wrist = signal["wrist"]
+    if not isinstance(wrist, dict) or "BVP" not in wrist:
+        raise WesadLayoutError(f"{pkl_path.name}: wrist block has no 'BVP'")
+
+    bvp = np.asarray(wrist["BVP"], dtype=np.float64).reshape(-1)
+    labels = np.asarray(raw["label"]).reshape(-1)
+    if bvp.size == 0:
+        raise WesadLayoutError(f"{pkl_path.name}: empty wrist BVP")
+    unexpected = set(np.unique(labels).tolist()) - _VALID_LABELS
+    if unexpected:
+        raise WesadLayoutError(f"{pkl_path.name}: unexpected label codes {sorted(unexpected)}")
+    if not {WESAD_BASELINE_LABEL, WESAD_STRESS_LABEL} <= set(np.unique(labels).tolist()):
+        raise WesadLayoutError(
+            f"{pkl_path.name}: baseline(1) and stress(2) conditions both required"
+        )
+
+    ratio = _CHEST_ECG_FS / _WRIST_BVP_FS
+    label_idx = np.clip(np.round(np.arange(bvp.size) * ratio).astype(np.intp), 0, labels.size - 1)
+    labels_bvp = labels[label_idx].astype(np.intp)
+    return bvp, labels_bvp
+
+
+def _hr_reading_ppg(
+    patient_id: Any, segment: FloatArray, extractor: FeatureExtractor, ts: datetime
+) -> float | None:
+    window = SignalWindow(
+        patient_id=patient_id,
+        metric_code=MetricCode.HEART_RATE,
+        context=MeasurementContext.RESTING,
+        window_start=ts,
+        window_end=ts,
+        waveform=RawWaveform(
+            kind=WaveformKind.PPG, sample_rate_hz=_WRIST_BVP_FS, samples=segment.tolist()
+        ),
+    )
+    features = extractor.extract(window).features
+    return features.get("heart_rate_bpm")
+
+
+def _subject_labelled_wrist_bvp(
+    pkl_path: Path,
+    *,
+    window_seconds: float,
+    extractor: FeatureExtractor,
+    config: BaselineConfig,
+) -> list[LabelledDeviation]:
+    bvp, labels = _load_subject_wrist_bvp(pkl_path)
+    window_samples = int(window_seconds * _WRIST_BVP_FS)
+    patient_id = uuid4()
+    engine = StatisticalBaselineEngine(
+        gate=SqiGate({"heart_rate": 0.0}), config=config, patient_id=patient_id
+    )
+
+    def make_reading(hr: float, seq: int) -> Reading:
+        return Reading(
+            patient_id=patient_id,
+            metric_code=MetricCode.HEART_RATE,
+            value=hr,
+            unit="bpm",
+            timestamp=_BASE_TS + timedelta(seconds=seq * window_seconds),
+            source_device="wesad_e4_wrist_bvp",
+            sqi=1.0,
+            context=MeasurementContext.RESTING,
+            ingest_adapter="wesad",
+        )
+
+    seq = 0
+    baseline_readings: list[Reading] = []
+    stress_readings: list[Reading] = []
+    for label, sink in (
+        (WESAD_BASELINE_LABEL, baseline_readings),
+        (WESAD_STRESS_LABEL, stress_readings),
+    ):
+        for segment in _condition_windows(bvp, labels, label, window_samples):
+            hr = _hr_reading_ppg(patient_id, segment, extractor, _BASE_TS)
+            if hr is None:
+                continue
+            sink.append(make_reading(hr, seq))
+            seq += 1
+
+    for reading in baseline_readings:
+        engine.update(reading)
+
+    labelled: list[LabelledDeviation] = []
+    for reading in baseline_readings:
+        labelled.append(LabelledDeviation(engine.score(reading), is_abnormal=False))
+    for reading in stress_readings:
+        labelled.append(LabelledDeviation(engine.score(reading), is_abnormal=True))
+    return labelled
+
+
+def load_wesad_wrist_bvp_labelled_deviations(
+    root: Path,
+    *,
+    extractor: FeatureExtractor,
+    subjects: Sequence[str] | None = None,
+    window_seconds: float = 8.0,
+    max_subjects: int | None = None,
+    config: BaselineConfig | None = None,
+) -> list[LabelledDeviation]:
+    """Parse WESAD wrist BVP (PPG @ 64 Hz) into labelled deviations via `extractor`.
+
+    Mirrors `load_wesad_labelled_deviations` but on the wrist PPG channel, so the
+    SAME harness scores either the classical DSP extractor or the learned
+    `FoundationEncoderFeatureExtractor`. Default window is 8 s (512 samples) — the
+    encoder's trained window length — so both extractors see identical inputs.
+    """
+    files = _subject_files(root)
+    if subjects is not None:
+        wanted = set(subjects)
+        files = [p for p in files if p.parent.name in wanted]
+    if max_subjects is not None:
+        files = files[:max_subjects]
+    if not files:
+        raise WesadLayoutError(f"no WESAD subject pickles found under {root}")
+
+    cfg = config or _wesad_config()
+    labelled: list[LabelledDeviation] = []
+    for pkl_path in files:
+        labelled.extend(
+            _subject_labelled_wrist_bvp(
+                pkl_path, window_seconds=window_seconds, extractor=extractor, config=cfg
+            )
+        )
+    return labelled
+
+
+@dataclass(frozen=True)
+class StressWindows:
+    """Raw wrist-BVP windows with binary stress labels (0=baseline, 1=stress/TSST) and
+    per-window subject provenance — the supervised set for the Sprint 10 stress head."""
+
+    signals: FloatArray  # [N, L] raw wrist BVP windows @ 64 Hz
+    labels: IntArray  # [N] 0/1 (baseline/stress)
+    subject_ids: tuple[str, ...]  # per-window subject stem, length N
+    sample_rate_hz: float
+    window_samples: int
+
+    def __len__(self) -> int:
+        return int(self.signals.shape[0])
+
+    @property
+    def subjects(self) -> tuple[str, ...]:
+        seen: dict[str, None] = {}
+        for sid in self.subject_ids:
+            seen.setdefault(sid, None)
+        return tuple(seen)
+
+
+def load_wesad_wrist_bvp_stress_windows(
+    root: Path,
+    *,
+    subjects: Sequence[str] | None = None,
+    window_seconds: float = 8.0,
+    max_subjects: int | None = None,
+    max_windows_per_condition: int | None = None,
+) -> StressWindows:
+    """Cut WESAD wrist BVP into raw windows labelled baseline(0)/stress(1), tagged with
+    the subject stem so a stress head can be trained/evaluated subject-held-out.
+
+    The default 8 s window = 512 samples = the encoder's trained window length, so the
+    same encoder trunk embeds these windows (docs/16 Sprint 10 stress head).
+    """
+    files = _subject_files(root)
+    if subjects is not None:
+        wanted = set(subjects)
+        files = [p for p in files if p.parent.name in wanted]
+    if max_subjects is not None:
+        files = files[:max_subjects]
+    if not files:
+        raise WesadLayoutError(f"no WESAD subject pickles found under {root}")
+
+    window_samples = int(window_seconds * _WRIST_BVP_FS)
+    all_sig: list[FloatArray] = []
+    all_lab: list[int] = []
+    subject_ids: list[str] = []
+    for pkl_path in files:
+        bvp, labels = _load_subject_wrist_bvp(pkl_path)
+        stem = pkl_path.parent.name
+        for label, y in ((WESAD_BASELINE_LABEL, 0), (WESAD_STRESS_LABEL, 1)):
+            windows = _condition_windows(bvp, labels, label, window_samples)
+            if max_windows_per_condition is not None:
+                windows = windows[:max_windows_per_condition]
+            for seg in windows:
+                all_sig.append(seg)
+                all_lab.append(y)
+                subject_ids.append(stem)
+
+    if not all_sig:
+        raise WesadLayoutError(f"no usable wrist-BVP stress windows extracted from {root}")
+    return StressWindows(
+        signals=np.asarray(all_sig, dtype=np.float64),
+        labels=np.asarray(all_lab, dtype=np.intp),
+        subject_ids=tuple(subject_ids),
+        sample_rate_hz=_WRIST_BVP_FS,
+        window_samples=window_samples,
+    )

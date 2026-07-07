@@ -15,10 +15,13 @@ from ai.eval_datasets.wesad import (
     WESAD_STRESS_LABEL,
     WesadLayoutError,
     load_wesad_labelled_deviations,
+    load_wesad_wrist_bvp_labelled_deviations,
     wesad_available,
 )
+from ai.features.waveform_extractor import WaveformFeatureExtractor
 
 _FS = 700.0
+_WRIST_FS = 64.0
 _REAL_ROOT = Path("datasets/WESAD")
 
 
@@ -113,3 +116,71 @@ def test_real_wesad_subject_sanity() -> None:
     assert 0.0 <= det.precision <= 1.0
     assert 0.0 <= det.recall <= 1.0
     assert det.tp + det.fn > 0  # some stress windows were actually present
+
+
+# -- wrist-BVP (PPG @ 64 Hz) path --------------------------------------------
+
+
+def _bvp_at(bpm: float, seconds: float, seed: int) -> np.ndarray:
+    """A layout-valid wrist BVP (PPG) at ~`bpm` with beat-to-beat jitter @ 64 Hz."""
+    rng = np.random.default_rng(seed)
+    n = int(seconds * _WRIST_FS)
+    t = np.arange(n) / _WRIST_FS
+    sig = np.zeros(n, dtype=np.float64)
+    beat = 60.0 / bpm
+    while beat < seconds:
+        sig += np.exp(-((t - beat) ** 2) / (2 * 0.040**2))  # wider systolic pulse
+        beat += (60.0 / bpm) * float(rng.uniform(0.92, 1.08))
+    return sig
+
+
+def _write_fake_wrist_subject(
+    root: Path, name: str, *, baseline_bpm: float, stress_bpm: float
+) -> None:
+    """Layout-valid pickle with a wrist BVP block; labels co-sampled at 700 Hz."""
+    base_secs, stress_secs = 360.0, 240.0
+    bvp = np.concatenate(
+        [_bvp_at(baseline_bpm, base_secs, seed=3), _bvp_at(stress_bpm, stress_secs, seed=4)]
+    )
+    labels = np.concatenate(
+        [
+            np.full(int(base_secs * _FS), WESAD_BASELINE_LABEL, dtype=int),
+            np.full(int(stress_secs * _FS), WESAD_STRESS_LABEL, dtype=int),
+        ]
+    )
+    sub = root / name
+    sub.mkdir(parents=True)
+    with (sub / f"{name}.pkl").open("wb") as fh:
+        pickle.dump({"signal": {"wrist": {"BVP": bvp.reshape(-1, 1)}}, "label": labels}, fh)
+
+
+def test_synthetic_wrist_bvp_produces_labelled_deviations(tmp_path: Path) -> None:
+    _write_fake_wrist_subject(tmp_path, "S99", baseline_bpm=65.0, stress_bpm=100.0)
+    labelled = load_wesad_wrist_bvp_labelled_deviations(
+        tmp_path, extractor=WaveformFeatureExtractor(), window_seconds=8.0
+    )
+    assert labelled
+    det = detection_metrics(labelled)
+    assert det.recall > 0.6  # a clean 35-bpm shift on the wrist channel is detectable
+    _ = expected_calibration_error(labelled)  # must not raise
+
+
+def test_wrist_bvp_missing_block_raises(tmp_path: Path) -> None:
+    sub = tmp_path / "S1"
+    sub.mkdir()
+    labels = np.array([1, 2], dtype=int)
+    with (sub / "S1.pkl").open("wb") as fh:
+        pickle.dump({"signal": {"chest": {"ECG": np.zeros((2, 1))}}, "label": labels}, fh)
+    with pytest.raises(WesadLayoutError, match="no 'wrist'"):
+        load_wesad_wrist_bvp_labelled_deviations(tmp_path, extractor=WaveformFeatureExtractor())
+
+
+@pytest.mark.skipif(not wesad_available(_REAL_ROOT), reason="WESAD dataset not on disk")
+def test_real_wesad_wrist_bvp_sanity() -> None:
+    labelled = load_wesad_wrist_bvp_labelled_deviations(
+        _REAL_ROOT, extractor=WaveformFeatureExtractor(), subjects=["S2"], window_seconds=8.0
+    )
+    assert len(labelled) > 30
+    det = detection_metrics(labelled)
+    assert 0.0 <= det.precision <= 1.0
+    assert det.tp + det.fn > 0

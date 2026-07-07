@@ -250,6 +250,42 @@ def _ppg_dalia_hr_section(
     return MetricSection(name="ppg_hr", dataset="PPG-DaLiA", metrics=metrics)
 
 
+def _wesad_wrist_bvp_dl_section(
+    root: Path, *, encoder_checkpoint: Path, max_subjects: int
+) -> MetricSection:
+    """WESAD wrist-BVP (PPG @ 64 Hz) deviation, learned encoder vs classical DSP on the
+    SAME windows — the DL half of the deviation DoD (docs/16 Sprint 10; see docs/17).
+
+    Wrist PPG under stress/motion is a harder signal than the chest-ECG deviation bar,
+    so these are typically below F1 0.80; the honest comparison is encoder vs classical.
+    """
+    from ai.eval_datasets.wesad import load_wesad_wrist_bvp_labelled_deviations
+    from ai.features.foundation_encoder import FoundationEncoderFeatureExtractor
+    from ai.features.waveform_extractor import WaveformFeatureExtractor
+
+    classical = load_wesad_wrist_bvp_labelled_deviations(
+        root, extractor=WaveformFeatureExtractor(), max_subjects=max_subjects
+    )
+    encoder = load_wesad_wrist_bvp_labelled_deviations(
+        root,
+        extractor=FoundationEncoderFeatureExtractor.from_checkpoint(encoder_checkpoint),
+        max_subjects=max_subjects,
+    )
+    cd, ce = detection_metrics(classical), expected_calibration_error(classical)
+    ed, ee = detection_metrics(encoder), expected_calibration_error(encoder)
+    return MetricSection(
+        name="deviation_wrist_bvp_dl",
+        dataset="WESAD-wrist-BVP",
+        metrics={
+            "classical_f1": cd.f1,
+            "classical_ece": ce.ece,
+            "encoder_f1": ed.f1,
+            "encoder_ece": ee.ece,
+            "n": float(ed.n),
+        },
+    )
+
+
 def _gaps(*, wesad_wired: bool, ppg_wired: bool) -> list[EvalGap]:
     gaps: list[EvalGap] = []
     if not ppg_wired:
@@ -374,6 +410,17 @@ def build_report(
                 ppg_root,
                 encoder_checkpoint=ppg_encoder_checkpoint,
                 max_windows_per_subject=ppg_max_windows_per_subject,
+            )
+        )
+    # The learned deviation half only appears when a checkpoint is configured (it runs
+    # the encoder over WESAD wrist BVP); classical WESAD numbers are always present above.
+    if wesad_wired and ppg_encoder_checkpoint is not None:
+        assert wesad_root is not None
+        report.sections.append(
+            _wesad_wrist_bvp_dl_section(
+                wesad_root,
+                encoder_checkpoint=ppg_encoder_checkpoint,
+                max_subjects=wesad_max_subjects,
             )
         )
     report.gaps = _gaps(wesad_wired=wesad_wired, ppg_wired=ppg_wired)

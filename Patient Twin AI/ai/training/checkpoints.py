@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -169,6 +169,68 @@ def load_encoder_weights(handle_or_path: CheckpointHandle | Path) -> EncoderWeig
         hr_std=float(npz["hr_std"][0]),
         sample_rate_hz=float(npz["sample_rate_hz"][0]),
         window_samples=int(npz["window_samples"][0]),
+    )
+
+
+def write_stress_head_checkpoint(
+    head: object,
+    *,
+    name: str,
+    config: object,
+    provenance: dict[str, object],
+    metrics: dict[str, float] | None = None,
+    root: Path = DEFAULT_CHECKPOINT_ROOT,
+    now: datetime | None = None,
+) -> CheckpointHandle:
+    """Write a stress-head checkpoint (`stress_head.npz` + `manifest.json`).
+
+    The stress head is a logistic regression on the encoder embedding — a small NumPy
+    artifact, content-addressed on the same identity scheme as the other checkpoints.
+    """
+    from ai.training.stress_head import StressHead
+
+    assert isinstance(head, StressHead)
+    is_instance = is_dataclass(config) and not isinstance(config, type)
+    config_dict = asdict(config) if is_instance else config
+    identity = {"name": name, "config": config_dict, "provenance": provenance}
+    version = f"{name}@{_hash_identity(identity)}"
+    out_dir = root / version
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    np.savez(
+        out_dir / "stress_head.npz",
+        w=head.w,
+        b=np.array([head.b]),
+        feat_mean=head.feat_mean,
+        feat_std=head.feat_std,
+    )
+    manifest: dict[str, object] = {
+        "name": name,
+        "version": version,
+        "kind": "ppg_stress_head",
+        "head_version": head.version,
+        "created_at": (now or datetime.now(UTC)).isoformat(),
+        "config": config_dict,
+        "provenance": provenance,
+        "metrics": metrics or {},
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+    return CheckpointHandle(path=out_dir, version=version, manifest=manifest)
+
+
+def load_stress_head(handle_or_path: CheckpointHandle | Path) -> object:
+    """Reload a `StressHead` from a checkpoint dir — NumPy only, no MLX needed."""
+    from ai.training.stress_head import StressHead
+
+    path = handle_or_path.path if isinstance(handle_or_path, CheckpointHandle) else handle_or_path
+    manifest = json.loads((path / "manifest.json").read_text())
+    npz = np.load(path / "stress_head.npz", allow_pickle=False)
+    return StressHead(
+        w=npz["w"].astype(np.float64),
+        b=float(npz["b"][0]),
+        feat_mean=npz["feat_mean"].astype(np.float64),
+        feat_std=npz["feat_std"].astype(np.float64),
+        version=str(manifest.get("head_version", "ppg-stress-logreg-v1")),
     )
 
 

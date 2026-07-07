@@ -34,10 +34,17 @@ class FoundationEncoderFeatureExtractor:
         *,
         version: str = FEATURE_EXTRACTOR_VERSION,
         fallback: WaveformFeatureExtractor | None = None,
+        stress_head: object | None = None,
     ) -> None:
         self._weights = weights  # EncoderWeights | None (None => always fall back)
         self._version = version
         self._fallback = fallback or WaveformFeatureExtractor()
+        self._stress_head = stress_head  # StressHead | None (adds stress_probability)
+
+    @property
+    def version(self) -> str:
+        """The learned extractor's identity — stamped on every FeatureSet it emits."""
+        return self._version
 
     @classmethod
     def from_checkpoint(
@@ -46,9 +53,14 @@ class FoundationEncoderFeatureExtractor:
         *,
         version: str = FEATURE_EXTRACTOR_VERSION,
         fallback: WaveformFeatureExtractor | None = None,
+        stress_head_path: Path | None = None,
     ) -> FoundationEncoderFeatureExtractor:
         """Load a trained encoder; if the checkpoint is absent, return a fallback-only
-        extractor (never raises — a missing model must not break the pipeline)."""
+        extractor (never raises — a missing model must not break the pipeline).
+
+        `stress_head_path`, when given and loadable, adds a `stress_probability` feature
+        from the same embedding; a missing/broken stress head is silently skipped.
+        """
         weights: object | None = None
         try:
             from ai.training.checkpoints import load_encoder_weights
@@ -56,7 +68,15 @@ class FoundationEncoderFeatureExtractor:
             weights = load_encoder_weights(path)
         except (FileNotFoundError, OSError, KeyError):
             weights = None
-        return cls(weights, version=version, fallback=fallback)
+        stress_head: object | None = None
+        if stress_head_path is not None:
+            try:
+                from ai.training.checkpoints import load_stress_head
+
+                stress_head = load_stress_head(stress_head_path)
+            except (FileNotFoundError, OSError, KeyError):
+                stress_head = None
+        return cls(weights, version=version, fallback=fallback, stress_head=stress_head)
 
     def _can_encode(self, window: SignalWindow) -> bool:
         if self._weights is None or window.waveform is None:
@@ -75,12 +95,21 @@ class FoundationEncoderFeatureExtractor:
         if not self._can_encode(window):
             return self._fallback.extract(window)
 
-        from ai.training.encoder_model import EncoderWeights, predict_hr
+        from ai.training.encoder_model import EncoderWeights, encoder_embedding
 
         assert isinstance(self._weights, EncoderWeights)
+        w = self._weights
         samples = np.asarray(window.waveform.samples, dtype=np.float64)  # type: ignore[union-attr]
-        segment = samples[-self._weights.window_samples :]  # trained window length
-        hr = float(predict_hr(self._weights, segment[np.newaxis, :])[0])
+        segment = samples[-w.window_samples :]  # trained window length
+        # One embedding, shared by every head (HR now; stress-context when configured).
+        emb = encoder_embedding(w, segment[np.newaxis, :])
+        hr = float((emb @ w.head_w + w.head_b)[0] * w.hr_std + w.hr_mean)
+        features: dict[str, float] = {"heart_rate_bpm": hr, "n_samples": float(samples.size)}
+        if self._stress_head is not None:
+            from ai.training.stress_head import StressHead, predict_stress_proba
+
+            assert isinstance(self._stress_head, StressHead)
+            features["stress_probability"] = float(predict_stress_proba(self._stress_head, emb)[0])
         return FeatureSet(
             patient_id=window.patient_id,
             metric_code=window.metric_code,
@@ -90,6 +119,6 @@ class FoundationEncoderFeatureExtractor:
             n_total=int(samples.size),
             n_quality_passing=int(samples.size),
             sqi_threshold_applied=None,  # raw-waveform SQI is UNSET clinical config
-            features={"heart_rate_bpm": hr, "n_samples": float(samples.size)},
+            features=features,
             feature_extractor_version=self._version,
         )

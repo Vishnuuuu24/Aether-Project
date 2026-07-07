@@ -101,6 +101,37 @@ def test_forward_is_deterministic() -> None:
     assert np.array_equal(predict_hr(w, sig), predict_hr(w, sig))
 
 
+def _multichannel_weights(n_channels: int, *, seed: int = 0) -> EncoderWeights:
+    rng = np.random.default_rng(seed)
+    in_c = n_channels
+    conv_w, conv_b = [], []
+    for out_c in CONV_CHANNELS:
+        conv_w.append(rng.normal(0, 0.1, size=(out_c, KERNEL_SIZE, in_c)))
+        conv_b.append(np.zeros(out_c))
+        in_c = out_c
+    return EncoderWeights(
+        conv_w=tuple(conv_w), conv_b=tuple(conv_b),
+        head_w=rng.normal(0, 0.1, size=CONV_CHANNELS[-1]), head_b=75.0,
+        hr_mean=75.0, hr_std=12.0, sample_rate_hz=64.0, window_samples=_WIN,
+    )
+
+
+def test_forward_2d_equals_3d_single_channel() -> None:
+    """A BVP-only [N, L] forward is a bit-for-bit special case of [N, L, 1]."""
+    w = _random_weights()
+    sig = np.random.default_rng(3).normal(size=(5, _WIN))
+    assert np.allclose(
+        encoder_embedding(w, sig), encoder_embedding(w, sig[:, :, np.newaxis]), atol=1e-12
+    )
+
+
+def test_forward_multichannel_shape_and_finite() -> None:
+    w = _multichannel_weights(4)  # BVP + 3-axis ACC
+    sig = np.random.default_rng(4).normal(size=(6, _WIN, 4))
+    assert encoder_embedding(w, sig).shape == (6, CONV_CHANNELS[-1])
+    assert np.all(np.isfinite(predict_hr(w, sig)))
+
+
 # --- subject-held-out split -------------------------------------------------------
 
 
@@ -266,6 +297,19 @@ def test_signal_loader_real_dataset_is_leakage_labelled() -> None:
     assert w.signals.shape[1] == w.window_samples
     assert len(w.subject_ids) == len(w)
     assert len(w.subjects) == 2  # two distinct subjects contributed
+
+
+@requires_ppg
+def test_fused_loader_has_four_channels() -> None:
+    from ai.eval_datasets.ppg_dalia import load_ppg_dalia_hr_fused_windows
+
+    w = load_ppg_dalia_hr_fused_windows(
+        _PPG_DALIA_ROOT, max_subjects=2, max_windows_per_subject=40
+    )
+    assert w.signals.ndim == 3
+    assert w.signals.shape[1:] == (w.window_samples, 4)  # BVP + 3-axis ACC
+    assert len(w.subject_ids) == len(w)
+    assert np.all(np.isfinite(w.signals))
 
 
 # --- end-to-end MLX training ------------------------------------------------------

@@ -129,7 +129,7 @@ added in `requirements-train.txt` (Apple-silicon only). 452 tests pass; ruff cle
 
 ---
 
-## Sprint 10 — Biosignal encoder + task heads  ⭐ flagship  ✅ PPG PATH DONE
+## Sprint 10 — Biosignal encoder + task heads  ⭐ flagship  ✅ DONE (both interfaces + both eval halves)
 
 *Source: `03 §DEFERRED`; `05 §3`; `12 §3`; `ai/interfaces/{feature_extractor,baseline_engine}.py`.*
 
@@ -156,6 +156,13 @@ we have ground truth for, then slot it behind the interfaces.
   checkpoint, non-PPG waveform, wrong sample rate, or short window all delegate to the
   DSP `WaveformFeatureExtractor`. Versioned + content-addressed checkpoint
   (`write_encoder_checkpoint`), stamped on a derived registry (human-gated release).
+- `FoundationEncoderBaselineEngine` (`ai/baseline/foundation_encoder.py`) implements the
+  stable **`BaselineEngine`** protocol. It ingests a **raw PPG window** (via the learned
+  extractor + classical fallback) into a derived HR reading, then delegates the deviation
+  math to `StatisticalBaselineEngine` **unchanged** — the learned part only produces a
+  better HR; the deterministic scoring/sufficiency/fallback-honesty invariants are
+  identical. Raw signal stays inside (principle 2); outputs carry the engine version.
+  Abstains (returns None) when no HR can be derived.
 - **Result (honest, full-quality run):** all 15 subjects (11 train / 4 fully held-out:
   S6, S8, S10, S13), 48 152 train / 16 545 val windows, 200 epochs. Encoder **HR MAE
   6.50 bpm** (best-checkpoint @ epoch 14) vs the **5-stat linear baseline 16.86 bpm**
@@ -170,17 +177,50 @@ we have ground truth for, then slot it behind the interfaces.
   pipeline, not just the linear baseline.
 - `dataset="PPG-DaLiA"` section wired into `ai/eval_report.py` (classical DSP always;
   encoder when a checkpoint is configured), with a logged gap when the dataset is absent.
-- Full result recorded in **`docs/17_Training_Log.md`** (the run history + comparison).
+- **Deviation half — DL vs classical on WESAD wrist BVP** (`ai/training/wesad_deviation_eval.py`,
+  `load_wesad_wrist_bvp_labelled_deviations`): the encoder scores **F1 0.701 / ECE 0.195**
+  vs classical **0.483 / 0.282** on the SAME 8 s wrist-PPG windows (n≈3.4k) — the learned
+  path **beats** classical at deviation too, and is better calibrated. A
+  `deviation_wrist_bvp_dl` section appears in the eval report when a checkpoint is
+  configured. (Correction: an earlier note called WESAD "ECG-only, different modality" —
+  wrong; its wrist block carries BVP @ 64 Hz, the encoder's own modality.)
+- **Stress-context head** (`ai/training/stress_head.py`, `train_stress_head.py`): a NumPy
+  logistic head on the SAME frozen encoder embedding predicts stress vs calm — the DoD's
+  "HR / **stress-context**". Subject-held-out on WESAD wrist BVP: **F1 0.803 / AUC 0.950 /
+  acc 0.834** vs majority 0.644 (n=912). Exposed as `stress_probability` on the extractor
+  (one embedding, two heads); NumPy at serving. The 0.95 AUC shows the representation
+  generalises beyond HR.
+- **Promotion recommendation** (`ai/training/promotion.py`): every trainer now writes an
+  advisory `promotion.json` (does it beat its explicit bars? recommend?) next to the
+  checkpoint. It is **advisory only** — no registry/routing/ruleset mutation; a human runs
+  the gate (CLAUDE.md §5). Closes the "unconditional promotion" concern.
+- Both results recorded in **`docs/17_Training_Log.md`** (the run history + comparison).
 
 **Remaining (scoped, honest):**
-- **Promotion** is human-gated (CLAUDE.md principle 5): the encoder wins its bar, so it
-  is *recommended* for promotion, but the version swap + audit event is a human action.
-- The **WESAD deviation half** (F1 ≥ 0.80 / ECE ≤ 0.15) is **ECG @ 700 Hz** — a different
-  modality from PPG @ 64 Hz, so the PPG encoder cannot score it; that path **stays
-  classical** (the "keep the fallback" rule). A scoped decision, not a silent gap.
-- *(enhancements)* accelerometer fusion (the real ceiling-raiser for wrist PPG under
-  motion) and **PaPaGei-S pretrained-weight** init — both drop in behind the same
-  interface. See the "next lever" note in `docs/17`.
+- **Promotion** is human-gated (CLAUDE.md principle 5): the encoder wins both bars (HR
+  MAE and wrist-BVP deviation) and the stress head beats its baseline, so all are
+  *recommended* (see each checkpoint's `promotion.json`), but the version swap + audit
+  event is a human action — never automatic.
+- Neither wrist-BVP deviation arm reaches the **chest-ECG** bar (F1 ≥ 0.80 / ECE ≤ 0.15):
+  wrist PPG during the TSST is a genuinely harder signal (motion + speech). The honest
+  comparison is encoder-vs-classical on the same signal (the encoder wins); the clean
+  chest-ECG deviation path stays classical.
+- **Accelerometer fusion — measured, and it did NOT help** (`ai/training/fusion_experiment.py`):
+  a multi-channel encoder (BVP + 3-axis wrist ACC resampled to the BVP grid) trained
+  head-to-head vs BVP-only on the same split, 200 epochs each. Honest result: BVP-only
+  **6.50** → BVP+ACC **7.77 bpm** — fusion is **19.6 % worse**, not better. The roadmap's
+  "ACC is the ceiling-raiser" intuition is **falsified for this naive concat-fusion +
+  small-CNN recipe**: PPG-DaLiA's GT HR is chest-ECG-derived (motion-robust) and BVP
+  already carries the rate, so 3 upsampled ACC channels mostly add input noise the tiny
+  net overfits. A real gain would need artifact-aware fusion (ACC to *gate/denoise* PPG,
+  not just concat) — a bigger design, not a v1 lever. The encoder trunk is multi-channel-
+  capable behind the interface; serving would also need a multi-channel signal contract
+  (`RawWaveform` is single-channel). **We keep BVP-only** on this evidence.
+- **PaPaGei-S pretrained-weight init** stays **deferred** (CLAUDE.md: PaPaGei-S / Pulse-PPG
+  deferred for v1). Its weights are not on disk and not on the HF model hub (they ship via
+  the authors' GitHub/Zenodo release), and adopting them means taking on their exact
+  encoder architecture — a distinct implementation behind the same `FeatureExtractor` seam,
+  not a weight-load into our CNN. Interface-ready; the artifact + port are the blocker.
 
 - **DoD:** a `FoundationEncoderFeatureExtractor` (implements `FeatureExtractor`) and a
   `FoundationEncoderBaselineEngine` (implements `BaselineEngine`) derive HR / stress-

@@ -61,6 +61,7 @@ TRAIN_BACKEND=mlx|cuda_qlora
 - Don't load-test on the Mac — it's single-tenant (~20–50 tok/s). NFR latency/throughput numbers are measured on the H200 only.
 - On the Mac, confirm the MoE quant of the primary actually loads via mlx-lm before depending on it; keep `gpt-oss-20b` or a small dense model as a known-good fallback.
 - **Log every training run and eval in `docs/17_Training_Log.md`** — the single source-of-truth history + comparison file (what / how / result / good-or-bad / next-lever). Trainers under `ai/training/` print a paste-ready stub; append it plus a one-line judgement. Mandatory per the `docs/16` DoD — never let a run go unlogged. Training must be full-quality (no capping data/epochs for speed) and keep the best-validation checkpoint.
+- **Record big steps in agent memory** — whenever a session completes a significant milestone (a sprint, major feature, key decision, completed build/eval), write a concise project memory + a one-line `MEMORY.md` index entry that points to the authoritative doc (e.g. `docs/16`, `docs/17`) rather than duplicating it. This keeps cross-session progress continuous across compaction.
 
 ## Models (see `docs/03`, `docs/12`)
 - Primary LLM: **Qwen3.6 35B A3B** (self-hosted; gateway-abstracted).

@@ -51,7 +51,11 @@ class EncoderWeights:
 
 
 def znorm_windows(signals: FloatArray) -> FloatArray:
-    """Per-window z-normalisation: makes HR inference scale-invariant to BVP gain."""
+    """Per-window z-normalisation: makes HR inference scale-invariant to BVP gain.
+
+    Works on single-channel `[N, L]` and multi-channel `[N, L, C]` alike — the
+    normalisation is always over the length axis, so each channel is standardised
+    independently (BVP and each accelerometer axis on their own scale)."""
     x = np.asarray(signals, dtype=np.float64)
     mean = x.mean(axis=1, keepdims=True)
     std = x.std(axis=1, keepdims=True)
@@ -77,15 +81,22 @@ def _conv1d(x: FloatArray, weight: FloatArray, bias: FloatArray) -> FloatArray:
 
 
 def encoder_embedding(weights: EncoderWeights, signals: FloatArray) -> FloatArray:
-    """Run the conv trunk + GAP, returning the [N, EMBEDDING_DIM] embedding."""
-    x = znorm_windows(signals)[:, :, np.newaxis]  # [N, L, 1]
+    """Run the conv trunk + GAP, returning the [N, EMBEDDING_DIM] embedding.
+
+    `signals` is `[N, L]` (single-channel BVP) or `[N, L, C]` (BVP + accelerometer
+    fusion). Single-channel input is treated as `[N, L, 1]`, so a BVP-only model is a
+    bit-for-bit special case of the multi-channel forward (parity-tested)."""
+    x = np.asarray(signals, dtype=np.float64)
+    if x.ndim == 2:
+        x = x[:, :, np.newaxis]  # [N, L] -> [N, L, 1]
+    x = znorm_windows(x)  # per-channel z-norm over length
     for w, bias in zip(weights.conv_w, weights.conv_b, strict=True):
         x = np.maximum(_conv1d(x, w, bias), 0.0)  # conv + ReLU
     return x.mean(axis=1)  # global average pool over length -> [N, C_last]
 
 
 def predict_hr(weights: EncoderWeights, signals: FloatArray) -> FloatArray:
-    """Predict heart rate (bpm) for raw BVP windows [N, L]."""
+    """Predict heart rate (bpm) for raw windows [N, L] or fused windows [N, L, C]."""
     emb = encoder_embedding(weights, signals)
     standardised = emb @ weights.head_w + weights.head_b
     return standardised * weights.hr_std + weights.hr_mean

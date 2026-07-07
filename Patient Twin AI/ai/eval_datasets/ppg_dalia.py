@@ -29,6 +29,7 @@ FloatArray = np.ndarray[Any, np.dtype[np.float64]]
 
 # --- Sampling geometry for the PPG-DaLiA release (set-with-dataset; confirmed on load) ---
 _BVP_FS_HZ = 64.0  # Empatica E4 photoplethysmography (BVP)
+_ACC_FS_HZ = 32.0  # Empatica E4 wrist accelerometer (3-axis)
 _LABEL_FS_HZ = 0.5  # ground-truth HR: 8 s window shifted by 2 s (matches replay adapter)
 _HR_WINDOW_SECONDS = 8.0  # the window each GT-HR label summarises
 _HR_STEP_SECONDS = 2.0  # 1 / _LABEL_FS_HZ
@@ -211,6 +212,104 @@ def _window_signals(bvp: FloatArray, labels: FloatArray) -> tuple[FloatArray, Fl
     if not segs:
         return np.empty((0, win), dtype=np.float64), np.empty(0, dtype=np.float64)
     return np.asarray(segs, dtype=np.float64), np.asarray(targets, dtype=np.float64)
+
+
+def _load_subject_fused(pkl_path: Path) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """Load (wrist_bvp @64 Hz, wrist_acc [Nacc,3] @32 Hz, gt_hr_labels) with validation."""
+    bvp, labels = _load_subject(pkl_path)
+    with pkl_path.open("rb") as fh:
+        raw: Any = pickle.load(fh, encoding="latin1")  # noqa: S301 - trusted local dataset
+    wrist = raw["signal"]["wrist"]
+    if "ACC" not in wrist:
+        raise PpgDaliaLayoutError(f"{pkl_path.name}: wrist block has no 'ACC'")
+    acc = np.asarray(wrist["ACC"], dtype=np.float64)
+    if acc.ndim != 2 or acc.shape[1] != 3:
+        raise PpgDaliaLayoutError(f"{pkl_path.name}: wrist ACC not [N,3] (got {acc.shape})")
+    if not np.all(np.isfinite(acc)):
+        raise PpgDaliaLayoutError(f"{pkl_path.name}: non-finite wrist ACC")
+    # ACC (~32 Hz) must describe the same duration as BVP (~64 Hz) within tolerance.
+    acc_seconds = acc.shape[0] / _ACC_FS_HZ
+    bvp_seconds = bvp.size / _BVP_FS_HZ
+    if abs(acc_seconds - bvp_seconds) > _DURATION_TOLERANCE * max(acc_seconds, bvp_seconds):
+        raise PpgDaliaLayoutError(
+            f"{pkl_path.name}: ACC duration {acc_seconds:.0f}s vs BVP {bvp_seconds:.0f}s disagree"
+        )
+    return bvp, acc, labels
+
+
+def _window_fused(
+    bvp: FloatArray, acc: FloatArray, labels: FloatArray
+) -> tuple[FloatArray, FloatArray]:
+    """Cut BVP + ACC into the labels' 8 s / 2 s windows; ACC linearly resampled to the
+    BVP grid so each fused window is [L, 4] = (BVP, acc_x, acc_y, acc_z)."""
+    win = int(_HR_WINDOW_SECONDS * _BVP_FS_HZ)
+    step = int(_HR_STEP_SECONDS * _BVP_FS_HZ)
+    win_acc = int(_HR_WINDOW_SECONDS * _ACC_FS_HZ)
+    step_acc = int(_HR_STEP_SECONDS * _ACC_FS_HZ)
+    grid_bvp = np.linspace(0.0, 1.0, win)
+    grid_acc = np.linspace(0.0, 1.0, win_acc)
+    segs: list[FloatArray] = []
+    targets: list[float] = []
+    for i in range(labels.size):
+        start, end = i * step, i * step + win
+        a_start, a_end = i * step_acc, i * step_acc + win_acc
+        if end > bvp.size or a_end > acc.shape[0]:
+            break
+        acc_seg = acc[a_start:a_end]  # [win_acc, 3]
+        acc_up = np.stack(
+            [np.interp(grid_bvp, grid_acc, acc_seg[:, c]) for c in range(3)], axis=1
+        )  # [win, 3]
+        fused = np.concatenate([bvp[start:end][:, None], acc_up], axis=1)  # [win, 4]
+        segs.append(fused)
+        targets.append(float(labels[i]))
+    if not segs:
+        return np.empty((0, win, 4), dtype=np.float64), np.empty(0, dtype=np.float64)
+    return np.asarray(segs, dtype=np.float64), np.asarray(targets, dtype=np.float64)
+
+
+def load_ppg_dalia_hr_fused_windows(
+    root: Path,
+    *,
+    subjects: Sequence[str] | None = None,
+    max_subjects: int | None = None,
+    max_windows_per_subject: int | None = None,
+) -> SignalWindows:
+    """Like `load_ppg_dalia_hr_signal_windows` but each window is `[L, 4]` — raw BVP
+    plus the 3-axis wrist accelerometer resampled to the BVP grid (docs/16 Sprint 10
+    fusion experiment). `signals` is therefore `[N, L, 4]`; everything else matches."""
+    files = _subject_files(root)
+    if subjects is not None:
+        wanted = set(subjects)
+        files = [p for p in files if p.stem in wanted]
+    if max_subjects is not None:
+        files = files[:max_subjects]
+    if not files:
+        raise PpgDaliaLayoutError(f"no PPG-DaLiA subject pickles found under {root}")
+
+    win = int(_HR_WINDOW_SECONDS * _BVP_FS_HZ)
+    all_signals: list[FloatArray] = []
+    all_targets: list[FloatArray] = []
+    subject_ids: list[str] = []
+    for pkl_path in files:
+        bvp, acc, labels = _load_subject_fused(pkl_path)
+        segs, targets = _window_fused(bvp, acc, labels)
+        if max_windows_per_subject is not None:
+            segs, targets = segs[:max_windows_per_subject], targets[:max_windows_per_subject]
+        if len(targets) == 0:
+            continue
+        all_signals.append(segs)
+        all_targets.append(targets)
+        subject_ids.extend([pkl_path.stem] * len(targets))
+
+    if not all_signals:
+        raise PpgDaliaLayoutError(f"no usable fused HR windows extracted from {root}")
+    return SignalWindows(
+        signals=np.concatenate(all_signals, axis=0),
+        targets=np.concatenate(all_targets, axis=0),
+        subject_ids=tuple(subject_ids),
+        sample_rate_hz=_BVP_FS_HZ,
+        window_samples=win,
+    )
 
 
 def load_ppg_dalia_hr_signal_windows(

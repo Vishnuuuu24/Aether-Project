@@ -109,14 +109,23 @@ def train_encoder(
     set_global_seed(cfg.seed)
     hr_mean, hr_std = _standardise_targets(y_train)
 
-    xtr = mx.array(znorm_windows(signals_train)[:, :, None].astype(np.float32))
+    def _nlc(signals: FloatArray) -> np.ndarray:
+        """Z-norm and shape to [N, L, C] float32 (accepts [N, L] or [N, L, C])."""
+        x = znorm_windows(signals)
+        if x.ndim == 2:
+            x = x[:, :, None]
+        return x.astype(np.float32)
+
+    xtr_np = _nlc(signals_train)
+    n_channels = int(xtr_np.shape[2])
+    xtr = mx.array(xtr_np)
     ytr = mx.array(((y_train - hr_mean) / hr_std).astype(np.float32))
-    xva = mx.array(znorm_windows(signals_val)[:, :, None].astype(np.float32))
+    xva = mx.array(_nlc(signals_val))
 
     class ConvHrEncoder(nn.Module):  # type: ignore[misc]
         def __init__(self) -> None:
             super().__init__()
-            in_c = 1
+            in_c = n_channels  # 1 for BVP-only; 4 for BVP + 3-axis accelerometer fusion
             self.convs = []
             for out_c in CONV_CHANNELS:
                 self.convs.append(

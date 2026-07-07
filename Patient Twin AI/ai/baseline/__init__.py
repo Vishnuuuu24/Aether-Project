@@ -7,6 +7,10 @@ fallback. Deviation scoring produces `DeviationResult`s (docs/05 §5).
 """
 
 from .config import BaselineConfig, circadian_bucket
+from .foundation_encoder import (
+    FOUNDATION_ENCODER_BASELINE_VERSION,
+    FoundationEncoderBaselineEngine,
+)
 from .population import (
     PopulationReferenceProvider,
     StaticPopulationReferenceProvider,
@@ -16,7 +20,9 @@ from .statistical import BASELINE_ENGINE_VERSION, StatisticalBaselineEngine
 
 __all__ = [
     "BASELINE_ENGINE_VERSION",
+    "FOUNDATION_ENCODER_BASELINE_VERSION",
     "BaselineConfig",
+    "FoundationEncoderBaselineEngine",
     "PopulationReferenceProvider",
     "StaticPopulationReferenceProvider",
     "StatisticalBaselineEngine",
